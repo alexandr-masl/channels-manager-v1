@@ -12,7 +12,9 @@ isolated lookup for tests without mutating global environment variables.
   `ACCOUNT_VALIDATOR_MONGO_PATH`, `REDIS`.
 - Existing environment names and defaults are listed in [`.env.example`](../.env.example).
 - `CONSUMER_PREFETCH` bounds unacknowledged deliveries (default 2, range 1–65535).
-  The future worker must enforce that bound when scheduling handlers.
+  It also bounds active handlers and pending publisher confirmations.
+- `RABBITMQ_HEARTBEAT_SECONDS` defaults to 30 and overrides a heartbeat in the URI.
+  Zero is rejected; the broker negotiates the final timeout.
 - Ports use 1–65535; millisecond settings use 1–2147483647. Explicit malformed
   values fail validation instead of silently falling back.
 - Reconnect maximum must be at least the base; jitter must be finite in [0, 1].

@@ -1,0 +1,845 @@
+use channels_manager_v1::{
+    config::AppConfig,
+    contracts::{
+        messages::{NewTradeMessage, trade_creation_id},
+        rabbitmq::*,
+    },
+    rabbitmq::{PreparedPublication, RabbitError, RabbitMq},
+};
+use channels_manager_v1::{
+    infrastructure::{DeliveryHandler, Infrastructure, WorkerServices},
+    rabbitmq::InboundDelivery,
+    runtime::{Lifecycle, Phase},
+};
+use lapin::{BasicProperties, Connection, ConnectionProperties, options::*, types::FieldTable};
+use serde_json::json;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
+use std::{
+    path::PathBuf,
+    process::{Child, Command, Stdio},
+    time::Duration,
+};
+use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
+
+struct Stores {
+    mongo: Child,
+    redis: Child,
+    mongo_port: u16,
+    redis_port: u16,
+}
+impl Drop for Stores {
+    fn drop(&mut self) {
+        let _ = self.mongo.kill();
+        let _ = self.mongo.wait();
+        let _ = self.redis.kill();
+        let _ = self.redis.wait();
+    }
+}
+impl Stores {
+    async fn start(directory: &std::path::Path) -> Self {
+        let mongo_port = free_port();
+        let redis_port = free_port();
+        let path = directory.join("mongo");
+        std::fs::create_dir_all(&path).unwrap();
+        let mongo = Command::new(std::env::var("MONGOD_BIN").unwrap_or_else(|_| "mongod".into()))
+            .args(["--bind_ip", "127.0.0.1", "--port", &mongo_port.to_string()])
+            .arg("--dbpath")
+            .arg(&path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let redis = Command::new(
+            std::env::var("REDIS_SERVER_BIN").unwrap_or_else(|_| "redis-server".into()),
+        )
+        .args([
+            "--bind",
+            "127.0.0.1",
+            "--port",
+            &redis_port.to_string(),
+            "--save",
+            "",
+            "--appendonly",
+            "no",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+        let stores = Self {
+            mongo,
+            redis,
+            mongo_port,
+            redis_port,
+        };
+        timeout(Duration::from_secs(10), async {
+            loop {
+                if tokio::net::TcpStream::connect(("127.0.0.1", mongo_port))
+                    .await
+                    .is_ok()
+                    && tokio::net::TcpStream::connect(("127.0.0.1", redis_port))
+                        .await
+                        .is_ok()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        stores
+    }
+    fn config(&self, broker: &Broker) -> AppConfig {
+        AppConfig::from_lookup(|key| match key {
+            "RABBIT_MQ" => Some(broker.uri()),
+            "REDIS" => Some("127.0.0.1".into()),
+            "REDIS_CLIENT_PORT" => Some(self.redis_port.to_string()),
+            "MONGO_PATH" => Some(format!("mongodb://127.0.0.1:{}/bot", self.mongo_port)),
+            "TRADE_STATION_MONGO_PATH" => {
+                Some(format!("mongodb://127.0.0.1:{}/trading", self.mongo_port))
+            }
+            "ACCOUNT_VALIDATOR_MONGO_PATH" => {
+                Some(format!("mongodb://127.0.0.1:{}/accounts", self.mongo_port))
+            }
+            "STARTUP_RETRY_DELAY_MS" => Some("50".into()),
+            "STARTUP_RETRY_MAX_DELAY_MS" => Some("100".into()),
+            _ => None,
+        })
+        .unwrap()
+    }
+}
+struct Handler {
+    active: Arc<AtomicUsize>,
+    max: Arc<AtomicUsize>,
+    done: Arc<AtomicUsize>,
+    gate: Arc<tokio::sync::Semaphore>,
+    fail: bool,
+    dropped: Arc<AtomicBool>,
+}
+impl DeliveryHandler for Handler {
+    fn handle(
+        &self,
+        delivery: InboundDelivery,
+        services: WorkerServices,
+    ) -> futures_util::future::BoxFuture<'static, Result<(), RabbitError>> {
+        let active = self.active.clone();
+        let max = self.max.clone();
+        let done = self.done.clone();
+        let gate = self.gate.clone();
+        let fail = self.fail;
+        let dropped = self.dropped.clone();
+        Box::pin(async move {
+            struct Guard {
+                active: Arc<AtomicUsize>,
+                dropped: Arc<AtomicBool>,
+                slow: bool,
+            }
+            impl Drop for Guard {
+                fn drop(&mut self) {
+                    if self.slow {
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                    self.active.fetch_sub(1, Ordering::SeqCst);
+                    self.dropped.store(true, Ordering::SeqCst);
+                }
+            }
+            let count = active.fetch_add(1, Ordering::SeqCst) + 1;
+            max.fetch_max(count, Ordering::SeqCst);
+            let guard = Guard {
+                active,
+                dropped,
+                slow: fail && delivery.body() == b"sibling",
+            };
+            if fail && delivery.body() == b"sibling" {
+                std::future::pending::<()>().await;
+            }
+            gate.acquire().await.unwrap().forget();
+            if fail {
+                return Err(RabbitError::InvalidPayload);
+            }
+            services
+                .publisher
+                .publish(&PreparedPublication::trade(&trade(), "work")?)
+                .await?;
+            delivery.ack().await?;
+            done.fetch_add(1, Ordering::SeqCst);
+            drop(guard);
+            Ok(())
+        })
+    }
+}
+async fn running(phases: &mut tokio::sync::watch::Receiver<Phase>) {
+    timeout(Duration::from_secs(10), async {
+        while *phases.borrow_and_update() != Phase::Running {
+            phases.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+}
+async fn seed(channel: &lapin::Channel, body: &[u8]) {
+    channel
+        .basic_publish(
+            "".into(),
+            BINGX_FUTURES_QUEUE.into(),
+            BasicPublishOptions::default(),
+            body,
+            BasicProperties::default(),
+        )
+        .await
+        .unwrap()
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "starts isolated RabbitMQ, MongoDB and Redis; requires loopback access"]
+async fn concrete_lifecycle_bounds_workers_and_joins_cleanup() {
+    let broker = Broker::start().await;
+    let stores = Stores::start(&broker.directory).await;
+    let admin = Connection::connect(&broker.uri(), ConnectionProperties::default())
+        .await
+        .unwrap();
+    let channel = admin.create_channel().await.unwrap();
+    channel
+        .confirm_select(ConfirmSelectOptions::default())
+        .await
+        .unwrap();
+    // Infrastructure-only startup must leave backlog untouched.
+    let config = stores.config(&broker);
+    let runtime = config.runtime.clone();
+    let lifecycle = Lifecycle::new(Infrastructure::new(config, None).unwrap(), runtime).unwrap();
+    let mut phases = lifecycle.subscribe();
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(lifecycle.run(stop.clone()));
+    running(&mut phases).await;
+    seed(&channel, b"one").await;
+    seed(&channel, b"two").await;
+    seed(&channel, b"three").await;
+    let queue = channel
+        .queue_declare(
+            BINGX_FUTURES_QUEUE.into(),
+            QueueDeclareOptions {
+                passive: true,
+                ..Default::default()
+            },
+            FieldTable::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(queue.consumer_count(), 0);
+    assert_eq!(queue.message_count(), 3);
+    stop.cancel();
+    timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    let active = Arc::new(AtomicUsize::new(0));
+    let max = Arc::new(AtomicUsize::new(0));
+    let done = Arc::new(AtomicUsize::new(0));
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let handler = Arc::new(Handler {
+        active: active.clone(),
+        max: max.clone(),
+        done: done.clone(),
+        gate: gate.clone(),
+        fail: false,
+        dropped: dropped.clone(),
+    });
+    let config = stores.config(&broker);
+    let runtime = config.runtime.clone();
+    let lifecycle =
+        Lifecycle::new(Infrastructure::new(config, Some(handler)).unwrap(), runtime).unwrap();
+    let mut phases = lifecycle.subscribe();
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(lifecycle.run(stop.clone()));
+    running(&mut phases).await;
+    timeout(Duration::from_secs(3), async {
+        while active.load(Ordering::SeqCst) != 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(max.load(Ordering::SeqCst), 2);
+    gate.add_permits(3);
+    timeout(Duration::from_secs(3), async {
+        while done.load(Ordering::SeqCst) != 3 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    stop.cancel();
+    timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(active.load(Ordering::SeqCst), 0);
+
+    // A failed handler must join a sibling's destructor before teardown completes.
+    dropped.store(false, Ordering::SeqCst);
+    gate.forget_permits(gate.available_permits());
+    seed(&channel, b"sibling").await;
+    seed(&channel, b"fail").await;
+    let handler = Arc::new(Handler {
+        active: active.clone(),
+        max,
+        done,
+        gate: gate.clone(),
+        fail: true,
+        dropped: dropped.clone(),
+    });
+    let config = stores.config(&broker);
+    let runtime = config.runtime.clone();
+    let lifecycle =
+        Lifecycle::new(Infrastructure::new(config, Some(handler)).unwrap(), runtime).unwrap();
+    let mut phases = lifecycle.subscribe();
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(lifecycle.run(stop.clone()));
+    running(&mut phases).await;
+    timeout(Duration::from_secs(3), async {
+        while active.load(Ordering::SeqCst) != 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    gate.add_permits(1);
+    timeout(Duration::from_secs(3), async {
+        while *phases.borrow_and_update() == Phase::Running {
+            phases.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    stop.cancel();
+    let _ = timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        active.load(Ordering::SeqCst),
+        0,
+        "coordinator completed before sibling cleanup"
+    );
+    channel
+        .queue_purge(BINGX_FUTURES_QUEUE.into(), QueuePurgeOptions::default())
+        .await
+        .unwrap();
+    seed(&channel, b"sibling").await;
+    let handler = Arc::new(Handler {
+        active: active.clone(),
+        max: Arc::new(AtomicUsize::new(0)),
+        done: Arc::new(AtomicUsize::new(0)),
+        gate: Arc::new(tokio::sync::Semaphore::new(0)),
+        fail: true,
+        dropped: Arc::new(AtomicBool::new(false)),
+    });
+    let config = stores.config(&broker);
+    let mut runtime = config.runtime.clone();
+    runtime.shutdown_drain_timeout = Duration::from_millis(50);
+    let lifecycle =
+        Lifecycle::new(Infrastructure::new(config, Some(handler)).unwrap(), runtime).unwrap();
+    let mut phases = lifecycle.subscribe();
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(lifecycle.run(stop.clone()));
+    running(&mut phases).await;
+    timeout(Duration::from_secs(3), async {
+        while active.load(Ordering::SeqCst) != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    stop.cancel();
+    let error = timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        error
+            .shutdown
+            .iter()
+            .any(|e| e.step == channels_manager_v1::runtime::ShutdownStep::Drain)
+    );
+    assert_eq!(
+        active.load(Ordering::SeqCst),
+        0,
+        "forced abort did not join handler cleanup"
+    );
+    admin.close(200, "OK".into()).await.unwrap();
+}
+
+struct Broker {
+    process: Child,
+    directory: PathBuf,
+    port: u16,
+    epmd_port: u16,
+}
+impl Drop for Broker {
+    fn drop(&mut self) {
+        let _ = self.process.kill();
+        let _ = self.process.wait();
+        let _ = Command::new("epmd")
+            .env("ERL_EPMD_PORT", self.epmd_port.to_string())
+            .arg("-kill")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
+}
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+impl Broker {
+    async fn start() -> Self {
+        let port = free_port();
+        let epmd_port = free_port();
+        let dist_port = free_port();
+        let directory =
+            std::env::temp_dir().join(format!("channels-rabbit-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("rabbitmq.conf"),
+            format!("listeners.tcp.1 = 127.0.0.1:{port}\nloopback_users.guest = true\n"),
+        )
+        .unwrap();
+        std::fs::write(directory.join("env.conf"), "").unwrap();
+        std::fs::write(directory.join("plugins"), "[].\n").unwrap();
+        let log = std::fs::File::create(directory.join("startup.log")).unwrap();
+        let process = Command::new(
+            std::env::var("RABBITMQ_SERVER_BIN").unwrap_or_else(|_| "rabbitmq-server".into()),
+        )
+        .env("RABBITMQ_CONF_ENV_FILE", directory.join("env.conf"))
+        .env("RABBITMQ_CONFIG_FILE", directory.join("rabbitmq.conf"))
+        .env("RABBITMQ_MNESIA_BASE", directory.join("data"))
+        .env("RABBITMQ_LOG_BASE", directory.join("logs"))
+        .env("RABBITMQ_PID_FILE", directory.join("pid"))
+        .env("RABBITMQ_ENABLED_PLUGINS_FILE", directory.join("plugins"))
+        .env("RABBITMQ_NODENAME", format!("channels_{port}@localhost"))
+        .env("RABBITMQ_NODE_PORT", port.to_string())
+        .env("RABBITMQ_DIST_PORT", dist_port.to_string())
+        .env("ERL_EPMD_PORT", epmd_port.to_string())
+        .env("ERL_EPMD_ADDRESS", "127.0.0.1")
+        .env(
+            "RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS",
+            "+S 2:2 +A 2 -setcookie isolated_channels_test",
+        )
+        .env("RABBITMQ_ALLOW_INPUT", "1")
+        .env("RABBITMQ_SERVER_START_ARGS", "-noshell -noinput")
+        .stdin(Stdio::null())
+        .stdout(log.try_clone().unwrap())
+        .stderr(log)
+        .spawn()
+        .unwrap();
+        let broker = Self {
+            process,
+            directory,
+            port,
+            epmd_port,
+        };
+        timeout(Duration::from_secs(40), async {
+            loop {
+                if let Ok(Ok(conn)) = timeout(
+                    Duration::from_secs(1),
+                    Connection::connect(&broker.uri(), ConnectionProperties::default()),
+                )
+                .await
+                {
+                    conn.close(200, "OK".into()).await.unwrap();
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "RabbitMQ startup failed: {}",
+                std::fs::read_to_string(broker.directory.join("startup.log")).unwrap()
+            )
+        });
+        broker
+    }
+    fn uri(&self) -> String {
+        format!("amqp://guest:guest@127.0.0.1:{}/%2f", self.port)
+    }
+    fn config(&self) -> AppConfig {
+        AppConfig::from_lookup(|key| match key {
+            "RABBIT_MQ" => Some(self.uri()),
+            "REDIS" => Some("127.0.0.1".into()),
+            "MONGO_PATH" | "TRADE_STATION_MONGO_PATH" | "ACCOUNT_VALIDATOR_MONGO_PATH" => {
+                Some("mongodb://localhost/test".into())
+            }
+            "RABBITMQ_RETRY_DELAY_MS" => Some("100".into()),
+            _ => None,
+        })
+        .unwrap()
+    }
+}
+fn trade() -> NewTradeMessage {
+    NewTradeMessage {
+        expires_at: 4102444800000,
+        trade_object: json!({"id":trade_creation_id("work"),"symbol":"BTC-USDT"}),
+        client_data: json!({"clientId":"account","provider":"BingX"}),
+    }
+}
+
+#[test]
+fn prepared_trade_preserves_identity_expiry_and_bytes() {
+    let mut input = trade();
+    let prepared = PreparedPublication::trade(&input, "work").unwrap();
+    let bytes = prepared.body().to_vec();
+    input.expires_at = 1;
+    input.trade_object["symbol"] = json!("changed");
+    assert_eq!(prepared.body(), bytes);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["expires_at"],
+        4102444800000u64
+    );
+    assert!(matches!(
+        PreparedPublication::trade(&input, "other"),
+        Err(RabbitError::InvalidPayload)
+    ));
+}
+
+#[tokio::test]
+#[ignore = "starts an isolated local RabbitMQ; requires loopback access"]
+async fn rabbitmq_stage5_contracts() {
+    let mut broker = Broker::start().await;
+    let config = broker.config();
+    let mut rabbit = RabbitMq::new(config.rabbitmq.clone(), config.runtime.operation_timeout);
+    assert!(rabbit.publisher().is_err());
+    rabbit.connect_and_declare().await.unwrap();
+    rabbit.initialize_publisher().await.unwrap();
+    assert!(rabbit.heartbeat_seconds() > 0);
+    let publisher = rabbit.publisher().unwrap();
+    let admin = Connection::connect(&broker.uri(), ConnectionProperties::default())
+        .await
+        .unwrap();
+    let channel = admin.create_channel().await.unwrap();
+    channel
+        .confirm_select(ConfirmSelectOptions::default())
+        .await
+        .unwrap();
+    // Equivalent redeclarations verify durability/exclusivity/deletion/arguments.
+    for queue in queue_contracts(&config.rabbitmq) {
+        channel
+            .queue_declare(
+                queue.name.into(),
+                QueueDeclareOptions::default(),
+                channels_manager_v1::rabbitmq::queue_arguments(&queue.arguments).unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+    let publication = PreparedPublication::trade(&trade(), "work").unwrap();
+    let mut expired = trade();
+    expired.expires_at = 1;
+    assert_eq!(
+        publisher
+            .publish(&PreparedPublication::trade(&expired, "work").unwrap())
+            .await,
+        Err(RabbitError::Expired)
+    );
+    publisher.publish(&publication).await.unwrap();
+    publisher.publish(&publication).await.unwrap();
+    for _ in 0..2 {
+        let delivery = channel
+            .basic_get(DEFAULT_TRADE_QUEUE.into(), BasicGetOptions::default())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(delivery.data, publication.body());
+        assert_eq!(delivery.properties.delivery_mode(), &Some(1));
+        assert_eq!(
+            delivery
+                .properties
+                .content_type()
+                .as_ref()
+                .unwrap()
+                .as_str(),
+            "application/json"
+        );
+        assert_eq!(
+            delivery.properties.message_id().as_ref().unwrap().as_str(),
+            trade_creation_id("work")
+        );
+        delivery.ack(BasicAckOptions::default()).await.unwrap();
+    }
+    channel
+        .queue_delete(DEFAULT_TRADE_QUEUE.into(), QueueDeleteOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        publisher.publish(&publication).await,
+        Err(RabbitError::Unroutable)
+    );
+    channel
+        .queue_declare(
+            DEFAULT_TRADE_QUEUE.into(),
+            QueueDeclareOptions::default(),
+            channels_manager_v1::rabbitmq::queue_arguments(
+                &json!({"x-max-length":1,"x-overflow":"reject-publish"}),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    publisher.publish(&publication).await.unwrap();
+    assert_eq!(
+        publisher.publish(&publication).await,
+        Err(RabbitError::Nack)
+    );
+    channel
+        .queue_delete(DEFAULT_TRADE_QUEUE.into(), QueueDeleteOptions::default())
+        .await
+        .unwrap();
+    channel
+        .queue_declare(
+            DEFAULT_TRADE_QUEUE.into(),
+            QueueDeclareOptions::default(),
+            FieldTable::default(),
+        )
+        .await
+        .unwrap();
+
+    let mut consumer = rabbit.start_consumer().await.unwrap();
+    publisher
+        .publish(
+            &PreparedPublication::retry(b"delayed".to_vec(), None, FieldTable::default()).unwrap(),
+        )
+        .await
+        .unwrap();
+    let delayed = timeout(Duration::from_secs(2), consumer.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(delayed.body(), b"delayed");
+    delayed.ack().await.unwrap();
+    for n in 0..3 {
+        channel
+            .basic_publish(
+                "".into(),
+                BINGX_FUTURES_QUEUE.into(),
+                BasicPublishOptions::default(),
+                n.to_string().as_bytes(),
+                BasicProperties::default(),
+            )
+            .await
+            .unwrap()
+            .await
+            .unwrap();
+    }
+    let first = timeout(Duration::from_secs(2), consumer.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let second = timeout(Duration::from_secs(2), consumer.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        timeout(Duration::from_millis(100), consumer.next())
+            .await
+            .is_err()
+    );
+    first.ack().await.unwrap();
+    let third = timeout(Duration::from_secs(2), consumer.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    second.ack().await.unwrap();
+    third.requeue().await.unwrap();
+    let redelivery = timeout(Duration::from_secs(2), consumer.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(redelivery.redelivered());
+    redelivery.ack().await.unwrap();
+    rabbit.quiesce();
+    assert!(consumer.next().await.unwrap().is_none());
+    rabbit.stop_consumers().await.unwrap();
+    rabbit.flush().await.unwrap();
+    rabbit.close().await.unwrap();
+    rabbit.close().await.unwrap();
+    assert_eq!(
+        publisher.publish(&publication).await,
+        Err(RabbitError::Unavailable)
+    );
+    rabbit.connect_and_declare().await.unwrap();
+    rabbit.initialize_publisher().await.unwrap();
+    let mut cancelled = rabbit.start_consumer().await.unwrap();
+    channel
+        .queue_delete(BINGX_FUTURES_QUEUE.into(), QueueDeleteOptions::default())
+        .await
+        .unwrap();
+    assert!(
+        timeout(Duration::from_secs(2), cancelled.next())
+            .await
+            .unwrap()
+            .is_err()
+    );
+    timeout(Duration::from_secs(2), rabbit.wait_for_failure())
+        .await
+        .unwrap();
+    rabbit.close().await.unwrap();
+    rabbit.connect_and_declare().await.unwrap();
+    rabbit.initialize_publisher().await.unwrap();
+    let idle = rabbit.publisher().unwrap();
+    broker.process.kill().unwrap();
+    broker.process.wait().unwrap();
+    timeout(Duration::from_secs(2), rabbit.wait_for_failure())
+        .await
+        .unwrap();
+    assert_eq!(
+        idle.publish(&publication).await,
+        Err(RabbitError::Unavailable)
+    );
+    rabbit.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "starts isolated RabbitMQ and a loopback fault proxy"]
+async fn lost_confirmation_is_uncertain_and_blocks_blind_replay() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let broker = Broker::start().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let upstream = broker.port;
+    let blocked = Arc::new(AtomicBool::new(false));
+    let block = blocked.clone();
+    let resume = Arc::new(tokio::sync::Notify::new());
+    let resumed = resume.clone();
+    let proxy = tokio::spawn(async move {
+        let (mut client, _) = listener.accept().await.unwrap();
+        let mut server = tokio::net::TcpStream::connect(("127.0.0.1", upstream))
+            .await
+            .unwrap();
+        let (mut cr, mut cw) = client.split();
+        let (mut sr, mut sw) = server.split();
+        let inbound = tokio::io::copy(&mut cr, &mut sw);
+        let outbound = async {
+            let mut bytes = [0u8; 8192];
+            loop {
+                let count = sr.read(&mut bytes).await?;
+                if count == 0 {
+                    break;
+                }
+                if block.load(Ordering::SeqCst) {
+                    resumed.notified().await;
+                }
+                cw.write_all(&bytes[..count]).await?;
+            }
+            Ok::<_, std::io::Error>(())
+        };
+        tokio::select! {_=inbound=>{},_=outbound=>{}}
+    });
+    struct Abort(tokio::task::JoinHandle<()>);
+    impl Drop for Abort {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let _proxy = Abort(proxy);
+    let uri = format!("amqp://guest:guest@127.0.0.1:{port}/%2f");
+    let mut config = AppConfig::from_lookup(|key| match key {
+        "RABBIT_MQ" => Some(uri.clone()),
+        "REDIS" => Some("localhost".into()),
+        "MONGO_PATH" | "TRADE_STATION_MONGO_PATH" | "ACCOUNT_VALIDATOR_MONGO_PATH" => {
+            Some("mongodb://localhost/test".into())
+        }
+        _ => None,
+    })
+    .unwrap();
+    config.rabbitmq.publish_timeout = Duration::from_millis(100);
+    let mut rabbit = RabbitMq::new(config.rabbitmq, Duration::from_secs(2));
+    rabbit.connect_and_declare().await.unwrap();
+    rabbit.initialize_publisher().await.unwrap();
+    let publisher = rabbit.publisher().unwrap();
+    let message = PreparedPublication::trade(&trade(), "work").unwrap();
+    blocked.store(true, Ordering::SeqCst);
+    assert_eq!(
+        timeout(Duration::from_secs(1), publisher.publish(&message))
+            .await
+            .unwrap(),
+        Err(RabbitError::PublishUncertain)
+    );
+    assert_eq!(
+        publisher.publish(&message).await,
+        Err(RabbitError::Unavailable)
+    );
+    let admin = Connection::connect(&broker.uri(), ConnectionProperties::default())
+        .await
+        .unwrap();
+    let channel = admin.create_channel().await.unwrap();
+    let queue = channel
+        .queue_declare(
+            DEFAULT_TRADE_QUEUE.into(),
+            QueueDeclareOptions {
+                passive: true,
+                ..Default::default()
+            },
+            FieldTable::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        queue.message_count(),
+        1,
+        "uncertain publication was replayed"
+    );
+    blocked.store(false, Ordering::SeqCst);
+    resume.notify_one();
+    rabbit.close().await.unwrap();
+    admin.close(200, "OK".into()).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "uses a loopback server to stall the AMQP handshake"]
+async fn stalled_handshake_is_bounded_and_releases_socket() {
+    use tokio::io::AsyncReadExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let config = AppConfig::from_lookup(|key| match key {
+        "RABBIT_MQ" => Some(format!("amqp://127.0.0.1:{port}/%2f")),
+        "REDIS" => Some("localhost".into()),
+        "MONGO_PATH" | "TRADE_STATION_MONGO_PATH" | "ACCOUNT_VALIDATOR_MONGO_PATH" => {
+            Some("mongodb://localhost/test".into())
+        }
+        _ => None,
+    })
+    .unwrap();
+    let mut rabbit = RabbitMq::new(config.rabbitmq, Duration::from_millis(100));
+    let connect = rabbit.connect_and_declare();
+    let (result, socket) = tokio::join!(connect, listener.accept());
+    let (mut socket, _) = socket.unwrap();
+    assert_eq!(result, Err(RabbitError::Timeout));
+    rabbit.close().await.unwrap();
+    let mut bytes = Vec::new();
+    timeout(Duration::from_secs(1), socket.read_to_end(&mut bytes))
+        .await
+        .expect("timed-out handshake retained socket")
+        .unwrap();
+}

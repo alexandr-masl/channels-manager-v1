@@ -179,6 +179,18 @@ impl RedisConnections {
     pub fn is_connected(&self) -> bool {
         self.locks.status.borrow().ready
     }
+    pub fn check_required(&self) -> Result<(), RedisError> {
+        let status = self.locks.status.borrow();
+        if !self.locks.closed.is_cancelled()
+            && status.ready
+            && status.accepting
+            && status.failure.is_none()
+        {
+            Ok(())
+        } else {
+            Err(RedisError::Unavailable)
+        }
+    }
     pub async fn connect_required(&mut self) -> Result<(), RedisError> {
         if self.locks.closed.is_cancelled() {
             *self = Self::new(self.config.clone(), &self.runtime)?;

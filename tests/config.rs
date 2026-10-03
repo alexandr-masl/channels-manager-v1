@@ -25,6 +25,7 @@ fn defaults_match_the_typescript_worker() {
     let env = environment();
     let config = AppConfig::from_lookup(|k| env.get(k).cloned()).unwrap();
     assert_eq!(config.rabbitmq.prefetch.get(), 2);
+    assert_eq!(config.rabbitmq.heartbeat_seconds.get(), 30);
     assert_eq!(config.rabbitmq.retry_max_attempts.get(), 5);
     assert_eq!(config.rabbitmq.retry_delay, Duration::from_secs(1));
     assert_eq!(config.rabbitmq.output_queue, "create-new-trusted-trade");

@@ -21,7 +21,8 @@ contain fixed codes only. Lock and cache operations use separate connections.
 invalidates leases and stops the monitor and connections; a later initialization
 creates fresh connections. Dropping a manager aborts its monitor.
 
-The full adapter and binary bootstrap will be composed with RabbitMQ in slice 5.
+The adapter and binary bootstrap are composed with RabbitMQ in slice 5.
+Only an explicitly supplied delivery handler enables consumer intake.
 
 ## Account leases
 

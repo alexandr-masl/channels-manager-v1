@@ -97,6 +97,25 @@ impl MongoConnections {
     pub async fn initialize_indexes(&self) -> Result<(), MongoError> {
         self.repositories()?.claims.initialize(self.timeout).await
     }
+    /// Recheck existing pools without resetting a verified claim index.
+    pub async fn verify_connections(&self) -> Result<(), MongoError> {
+        if !self.connected {
+            return Err(MongoError::new(
+                MongoRole::Bot,
+                MongoErrorKind::NotConnected,
+            ));
+        }
+        for (index, role) in ROLES.into_iter().enumerate() {
+            let pool = self.pools[index]
+                .as_ref()
+                .ok_or_else(|| MongoError::new(role, MongoErrorKind::NotConnected))?;
+            bounded(role, self.timeout, async {
+                pool.database.run_command(doc! {"ping":1}).await
+            })
+            .await?;
+        }
+        Ok(())
+    }
     /// Called after worker drain. Immediate driver shutdown also invalidates cloned handles.
     pub async fn close(&mut self) -> Result<(), MongoError> {
         self.connected = false;

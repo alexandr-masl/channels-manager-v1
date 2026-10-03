@@ -22,8 +22,9 @@ Reconnect requires index verification again. `close` invalidates claims and clos
 all pools after worker drain; repeated close is safe. Operations have deadlines,
 and exposed errors contain only the database role and sanitized error kind.
 
-These methods will be composed into the runtime adapter with Redis and RabbitMQ.
-The binary still validates configuration and exits until that composition exists.
+These methods are composed in `Infrastructure` with Redis and RabbitMQ.
+The binary starts infrastructure without consuming jobs. `--check-config` validates
+settings offline. Existing pools are periodically checked for connection failures.
 Health endpoints remain outside this issue.
 
 ## Repositories

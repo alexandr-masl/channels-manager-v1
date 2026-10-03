@@ -49,20 +49,21 @@ pub struct AppConfig {
     pub runtime: RuntimeConfig,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RabbitMqConfig {
     pub uri: ConnectionString,
     pub input_queue: &'static str,
     pub output_queue: String,
     /// Also bounds the worker's unacknowledged in-flight deliveries.
     pub prefetch: NonZeroU16,
+    pub heartbeat_seconds: NonZeroU16,
     pub retry_max_attempts: NonZeroU32,
     pub retry_delay: Duration,
     pub reconnect: ReconnectConfig,
     pub publish_timeout: Duration,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ReconnectConfig {
     pub base: Duration,
     pub max: Duration,
@@ -221,6 +222,7 @@ impl AppConfig {
                 input_queue: BINGX_FUTURES_QUEUE,
                 output_queue,
                 prefetch: reader.port("CONSUMER_PREFETCH", 2)?,
+                heartbeat_seconds: reader.port("RABBITMQ_HEARTBEAT_SECONDS", 30)?,
                 retry_max_attempts: reader.positive("RABBITMQ_RETRY_MAX_ATTEMPTS", 5)?,
                 retry_delay: reader.duration("RABBITMQ_RETRY_DELAY_MS", 1000)?,
                 reconnect,

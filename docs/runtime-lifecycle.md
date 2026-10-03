@@ -1,9 +1,9 @@
 # Runtime lifecycle
 
-`runtime::Lifecycle` owns one `LifecycleAdapter` and runs once. The adapter boundary
-allows orchestration to be tested before the database and broker implementations
-arrive in stages 3–5. `main` currently validates configuration and exits; it does
-not run a connected worker.
+`runtime::Lifecycle` owns one `LifecycleAdapter` and runs once. `Infrastructure`
+composes MongoDB, Redis, and RabbitMQ. `main` starts this infrastructure and waits
+for shutdown signals. It registers no consumers until a delivery handler exists;
+`--check-config` performs offline validation and exits.
 
 ## Startup and recovery
 
@@ -74,20 +74,25 @@ the drain budget. Jitter cannot produce a zero-delay retry loop.
 - Convert driver errors to static, sanitized failure codes. Credentials and raw
   connection errors must not cross into lifecycle diagnostics.
 
-Once concrete adapters exist, the bootstrap validates `AppConfig`, constructs
-the adapter with its connection settings, creates `Lifecycle` with `config.runtime`,
-and awaits `run_until_signal` inside Tokio. No production placeholder adapter is used.
+The bootstrap validates `AppConfig`, constructs `Infrastructure`, creates `Lifecycle`
+with `config.runtime`, and awaits `run_until_signal` inside Tokio. Supplying an
+explicit `DeliveryHandler` enables bounded dispatch with manual settlement. Handler
+errors and forced abort join all remaining handlers before connection teardown.
 
 The [MongoDB module](mongodb.md) now provides `connect`, `initialize_indexes`,
-and `close` for the corresponding lifecycle stages. Full adapter composition
-follows with RabbitMQ. The [Redis module](redis.md) provides required connection
+and `close` for the corresponding lifecycle stages. The [Redis module](redis.md) provides required connection
 startup, a latched failure signal, acquisition gating, and shutdown. Quiescing
-keeps lease renewal alive until worker drain completes.
+keeps lease renewal alive until worker drain completes. [RabbitMQ](rabbitmq.md)
+provides declaration, confirm publishing, consumer cancellation, flush, and close.
+Broker/channel errors and Redis failures are latched; periodic Mongo connection
+checks run concurrently with these signals. The lifecycle rebuilds all adapters
+after a required failure. Message retry/DLQ policy comes in slice 6.
 
 ## Verification
 
 `tests/lifecycle.rs` uses virtual time to test ordering, retries, recovery,
 cancellation, timeouts, and cleanup errors. `tests/lifecycle_signals.rs` starts
 isolated subprocesses to test real SIGTERM during operation and SIGINT during
-blocked startup. Tests use no external infrastructure; adapter integration tests
-will exercise actual outages in later stages.
+blocked startup. These tests use no external infrastructure. `tests/rabbitmq.rs`
+also exercises the concrete adapter with isolated MongoDB, Redis, and RabbitMQ,
+including backlog safety, bounded work, handler failure, and forced drain cleanup.
