@@ -5,7 +5,10 @@ connections and does not start consumers or trading logic.
 
 ## Configuration
 
-`AppConfig::from_env()` reads the process environment. `from_lookup()` accepts an
+`AppConfig::from_env()` reads optional `.env.local` from the current working
+directory, then applies process-environment overrides. Parsing does not mutate
+the process environment. Missing files are allowed; invalid files fail startup
+without printing their contents. `from_lookup()` accepts an
 isolated lookup for tests without mutating global environment variables.
 
 - Required: `RABBIT_MQ`, `MONGO_PATH`, `TRADE_STATION_MONGO_PATH`,

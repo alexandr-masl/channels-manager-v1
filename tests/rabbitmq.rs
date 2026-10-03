@@ -1462,3 +1462,126 @@ async fn startup_outage_preserves_backlog_until_required_dependency_recovers() {
         .unwrap()
         .unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "starts isolated RabbitMQ, MongoDB and Redis; requires loopback access"]
+async fn binary_logs_raw_telegram_signal_and_acknowledges() {
+    use std::io::{BufRead, BufReader};
+    let broker = Broker::start().await;
+    let stores = Stores::start(&broker.directory).await;
+    struct Process(Child);
+    impl Drop for Process {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut process = Process(
+        Command::new(env!("CARGO_BIN_EXE_channels-manager-v1"))
+            .current_dir(&broker.directory)
+            .env_clear()
+            .env("RABBIT_MQ", broker.uri())
+            .env("REDIS", "127.0.0.1")
+            .env("REDIS_CLIENT_PORT", stores.redis_port.to_string())
+            .env(
+                "MONGO_PATH",
+                format!("mongodb://127.0.0.1:{}/bot", stores.mongo_port),
+            )
+            .env(
+                "TRADE_STATION_MONGO_PATH",
+                format!("mongodb://127.0.0.1:{}/trading", stores.mongo_port),
+            )
+            .env(
+                "ACCOUNT_VALIDATOR_MONGO_PATH",
+                format!("mongodb://127.0.0.1:{}/accounts", stores.mongo_port),
+            )
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let stdout = process.0.stdout.take().unwrap();
+    let (lines_tx, mut lines) = tokio::sync::mpsc::unbounded_channel();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if lines_tx.send(line.unwrap()).is_err() {
+                break;
+            }
+        }
+    });
+    timeout(Duration::from_secs(10), async {
+        while !lines
+            .recv()
+            .await
+            .unwrap()
+            .contains("Listening for messages on tg_bot_channel_update")
+        {}
+    })
+    .await
+    .unwrap();
+    let admin = Connection::connect(&broker.uri(), ConnectionProperties::default())
+        .await
+        .unwrap();
+    let channel = admin.create_channel().await.unwrap();
+    channel
+        .confirm_select(ConfirmSelectOptions::default())
+        .await
+        .unwrap();
+    let body = serde_json::to_vec(&json!({"message_id":7,"date":1791056304,"chat":{"id":-1001596367704i64,"type":"channel"},"text":include_str!("../examples/fixtures/ada-signal.txt").trim_end()})).unwrap();
+    channel
+        .basic_publish(
+            "".into(),
+            TELEGRAM_CHANNEL_QUEUE.into(),
+            BasicPublishOptions::default(),
+            &body,
+            BasicProperties::default(),
+        )
+        .await
+        .unwrap()
+        .await
+        .unwrap();
+    let line = timeout(Duration::from_secs(3), async {
+        loop {
+            let line = lines.recv().await.unwrap();
+            if line.starts_with("Incoming tg_bot_channel_update:") {
+                break line;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(line.contains("ADA/USDT"));
+    assert!(line.contains("0.2570"));
+    assert!(line.contains("-1001596367704"));
+    // Graceful drain completes settlement before closing the channel.
+    Command::new("kill")
+        .args(["-INT", &process.0.id().to_string()])
+        .status()
+        .unwrap();
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(status) = process.0.try_wait().unwrap() {
+                assert!(status.success());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    reader.join().unwrap();
+    assert!(
+        channel
+            .basic_get(TELEGRAM_CHANNEL_QUEUE.into(), BasicGetOptions::default())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        channel
+            .basic_get(DEFAULT_TRADE_QUEUE.into(), BasicGetOptions::default())
+            .await
+            .unwrap()
+            .is_none()
+    );
+}

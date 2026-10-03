@@ -149,11 +149,28 @@ impl RuntimeConfig {
 }
 
 impl AppConfig {
+    /// Read optional .env.local in the working directory, with process overrides.
+    /// Parse into a map instead of mutating the environment after Tokio starts.
     pub fn from_env() -> Result<Self, ConfigError> {
+        let file_error = || ConfigError {
+            setting: ".env.local",
+            reason: "could not read or parse environment file",
+        };
+        let mut local = std::collections::HashMap::new();
+        match dotenvy::from_path_iter(".env.local") {
+            Ok(entries) => {
+                for entry in entries {
+                    let (key, value) = entry.map_err(|_| file_error())?;
+                    local.entry(key).or_insert(value);
+                }
+            }
+            Err(error) if error.not_found() => {}
+            Err(_) => return Err(file_error()),
+        }
         // Non-Unicode values are invalid, rather than silently treated as unset.
         Self::parse(Reader(|key| match std::env::var(key) {
             Ok(value) => Ok(Some(value)),
-            Err(std::env::VarError::NotPresent) => Ok(None),
+            Err(std::env::VarError::NotPresent) => Ok(local.get(key).cloned()),
             Err(std::env::VarError::NotUnicode(_)) => Err(ConfigError {
                 setting: key,
                 reason: "must be valid Unicode",
@@ -184,6 +201,7 @@ impl AppConfig {
         // A shared output/input queue would route published trades back as jobs.
         if [
             BINGX_FUTURES_QUEUE,
+            crate::contracts::rabbitmq::TELEGRAM_CHANNEL_QUEUE,
             crate::contracts::rabbitmq::ADMISSION_EVENT_QUEUE,
             crate::contracts::rabbitmq::DEAD_LETTER_QUEUE,
         ]

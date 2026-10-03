@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 async-compat = "0.2.6"
+dotenvy = "0.15.7"
 futures-util = "0.3.34"
 lapin = { version = "4.11.0", default-features = false, features = ["tokio", "rustls--ring", "rustls-native-certs"] }
 mongodb = "3.9.1"

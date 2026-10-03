@@ -60,8 +60,9 @@ admission/construction or execute exchange operations.
 
 ## Exclusive BingX Futures queue cutover
 
-The current binary starts infrastructure only. Complete and verify the business
-handler before this runbook is used for production. The queue is
+The current binary logs and acknowledges raw Telegram messages only. Replace
+the logging handler and select the BingX worker queue before production cutover.
+Complete and verify the business handler before this runbook is used for production. The queue is
 `satoshi-channel-updates.client-trade.bingx.futures`; TypeScript retains parsing
 and fan-out, and other provider queues remain owned by their existing workers.
 

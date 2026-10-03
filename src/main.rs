@@ -1,9 +1,28 @@
 use channels_manager_v1::{
     config::AppConfig,
-    infrastructure::Infrastructure,
+    contracts::rabbitmq::TELEGRAM_CHANNEL_QUEUE,
+    infrastructure::{DeliveryHandler, Infrastructure, WorkerServices},
+    rabbitmq::{InboundDelivery, RabbitError},
     runtime::{Lifecycle, run_until_signal},
 };
-use std::process::ExitCode;
+use std::{process::ExitCode, sync::Arc};
+
+struct LogTelegramMessage;
+impl DeliveryHandler for LogTelegramMessage {
+    fn handle(
+        &self,
+        delivery: InboundDelivery,
+        _services: WorkerServices,
+    ) -> futures_util::future::BoxFuture<'static, Result<(), RabbitError>> {
+        Box::pin(async move {
+            println!(
+                "Incoming {TELEGRAM_CHANNEL_QUEUE}: {:?}",
+                String::from_utf8_lossy(delivery.body())
+            );
+            delivery.ack().await
+        })
+    }
+}
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -16,7 +35,7 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let config = match AppConfig::from_env() {
+    let mut config = match AppConfig::from_env() {
         Ok(config) => config,
         Err(error) => {
             eprintln!("Configuration error: {error}");
@@ -27,8 +46,9 @@ async fn main() -> ExitCode {
         println!("Configuration valid.");
         return ExitCode::SUCCESS;
     }
+    config.rabbitmq.input_queue = TELEGRAM_CHANNEL_QUEUE;
     let runtime = config.runtime.clone();
-    let adapter = match Infrastructure::new(config, None) {
+    let adapter = match Infrastructure::new(config, Some(Arc::new(LogTelegramMessage))) {
         Ok(adapter) => adapter,
         Err(error) => {
             eprintln!("Infrastructure error: {}", error.code);
@@ -42,7 +62,9 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    println!("Starting infrastructure. Job consumption requires a delivery handler.");
+    println!(
+        "Starting infrastructure; incoming {TELEGRAM_CHANNEL_QUEUE} messages will be logged and acknowledged."
+    );
     match run_until_signal(lifecycle).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

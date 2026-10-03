@@ -214,6 +214,7 @@ impl RabbitMq {
         )
         .await?;
         self.session.check()?;
+        println!("Listening for messages on {}.", self.config.input_queue);
         Ok(RabbitConsumer {
             consumer,
             session: self.session.clone(),

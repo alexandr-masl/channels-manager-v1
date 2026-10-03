@@ -1,6 +1,8 @@
 use crate::config::RabbitMqConfig;
 use serde_json::{Value, json};
 
+pub const TELEGRAM_CHANNEL_QUEUE: &str = "tg_bot_channel_update";
+
 pub const BINGX_FUTURES_QUEUE: &str = "satoshi-channel-updates.client-trade.bingx.futures";
 pub const DEFAULT_TRADE_QUEUE: &str = "create-new-trusted-trade";
 pub const ADMISSION_EVENT_QUEUE: &str = "tg_bot_bingx_position_mode_action_required";

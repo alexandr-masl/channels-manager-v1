@@ -3,8 +3,8 @@
 Rust application for the incremental migration of `satoshi-channel-updates-manager`.
 
 The app connects MongoDB, Redis, and RabbitMQ through the runtime lifecycle.
-The executable runs infrastructure only; job consumption requires an explicit
-delivery handler. BingX Futures trade processing follows separately.
+The executable currently logs and acknowledges raw Telegram messages from
+`tg_bot_channel_update`. BingX Futures trade processing follows separately.
 See [AGENTS.md](AGENTS.md) for the migration boundary and source-of-truth documentation.
 
 ## Development
@@ -13,17 +13,15 @@ Requires Rust and Cargo with support for Rust edition 2024.
 
 ```sh
 cp .env.example .env.local
-# Edit .env.local for your environment, then export it in your shell:
-set -a
-. ./.env.local
-set +a
+# Edit .env.local for your environment.
 cargo run
 # Validate settings without opening connections:
 cargo run -- --check-config
 ```
 
-Environment files are not loaded automatically. Invalid settings cause a nonzero
-exit with the setting name, without printing credentials.
+Startup loads `.env.local` from the current working directory. Exported environment
+variables take precedence. The file is optional; malformed or unreadable files
+cause a sanitized configuration error. No credentials are printed.
 
 Build, test, and lint:
 
@@ -69,3 +67,28 @@ Run `./scripts/verify.sh` with all three service binaries installed. It includes
 all integration tests and matches the GitHub Actions verification job.
 See [verification coverage and rollout](docs/verification-and-rollout.md) for setup,
 acceptance checks, exclusive queue ownership, and rollback.
+
+## Send the ADA Telegram example
+
+Start the app, then send from a second terminal:
+
+```sh
+cargo run
+# Wait for "Listening for messages on tg_bot_channel_update.".
+```
+
+```sh
+cargo run --example send_telegram_signal
+# Optional channel ID override:
+cargo run --example send_telegram_signal -- -1001596367704
+```
+
+The sender uses `.env.local`, your ADA signal text, a fresh message ID/date, and
+channel ID `-1001596367704`. It publishes to the original bot queue
+`tg_bot_channel_update` on a local broker with confirms and a 60-second TTL.
+The app prints the incoming body and acknowledges it; no parsing or trades run.
+`CLIENT_TRADE_WORKER_QUEUES` describes the later BingX client-job boundary and is
+not the queue used by this temporary raw-message logger.
+
+Use a local broker/vhost without the TypeScript consumer: consumers sharing the
+same queue compete for messages. This logger acknowledges messages after logging.
