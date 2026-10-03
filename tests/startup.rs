@@ -24,6 +24,10 @@ fn valid_configuration_is_checked_without_opening_connections() {
             "mongodb://unreachable.invalid/trading",
         )
         .env("REDIS", "unreachable.invalid")
+        .env(
+            "ACCOUNT_VALIDATOR_MONGO_PATH",
+            "mongodb://unreachable.invalid/accounts",
+        )
         .output()
         .unwrap();
     assert!(output.status.success());

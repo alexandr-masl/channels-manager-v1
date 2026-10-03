@@ -9,7 +9,7 @@ not run a connected worker.
 
 Startup order is fixed:
 
-1. Connect bot and Trading Station MongoDB clients.
+1. Connect bot, Trading Station, and account-validator MongoDB clients.
 2. Initialize and verify execution-claim indexes.
 3. Connect required Redis clients.
 4. Connect RabbitMQ and assert declarations.
@@ -77,6 +77,10 @@ the drain budget. Jitter cannot produce a zero-delay retry loop.
 Once concrete adapters exist, the bootstrap validates `AppConfig`, constructs
 the adapter with its connection settings, creates `Lifecycle` with `config.runtime`,
 and awaits `run_until_signal` inside Tokio. No production placeholder adapter is used.
+
+The [MongoDB module](mongodb.md) now provides `connect`, `initialize_indexes`,
+and `close` for the corresponding lifecycle stages. Full adapter composition
+follows with Redis and RabbitMQ.
 
 ## Verification
 

@@ -14,6 +14,8 @@ pub const EXECUTION_CLEANUP_DEADLINE: Duration = Duration::from_secs(2);
 pub const CLAIMS_COLLECTION: &str = "bingx_futures_execution_claims";
 pub const USER_CONFIGS_COLLECTION: &str = "user_configs";
 pub const ACTIVE_TRADES_COLLECTION: &str = "trade_station_active_trades";
+pub const ACCOUNTS_COLLECTION: &str = "users";
+pub const CLAIMS_INDEX: &str = "uq_bingx_futures_execution_claim_work_id";
 pub const CLAIM_WRITE_CONCERN: &str = "majority";
 pub const CLAIM_JOURNALED: bool = true;
 pub const CLAIM_READ_CONCERN: &str = "majority";
@@ -32,7 +34,7 @@ pub struct IndexContract {
 
 pub fn execution_claim_index() -> IndexContract {
     IndexContract {
-        name: "uq_bingx_futures_execution_claim_work_id",
+        name: CLAIMS_INDEX,
         keys: json!({"workId":1}),
         unique: true,
         expire_after_seconds: None,

@@ -38,3 +38,10 @@ compatibility boundaries, and dependency requirements.
 The [runtime lifecycle](docs/runtime-lifecycle.md) coordinator implements ordered
 startup, recovery, SIGINT/SIGTERM cancellation, and bounded shutdown. Concrete
 infrastructure adapters and their connection to `main` follow in stages 3–5.
+
+Stage 3 provides [MongoDB pools and repositories](docs/mongodb.md) for all three
+databases. Run its isolated integration test with a local `mongod` installed:
+
+```sh
+cargo test --test mongodb -- --ignored
+```

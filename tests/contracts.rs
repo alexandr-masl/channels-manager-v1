@@ -7,7 +7,9 @@ use serde_json::{Value, json};
 fn config() -> AppConfig {
     AppConfig::from_lookup(|key| match key {
         "RABBIT_MQ" => Some("amqp://localhost".into()),
-        "MONGO_PATH" | "TRADE_STATION_MONGO_PATH" => Some("mongodb://localhost/test".into()),
+        "MONGO_PATH" | "TRADE_STATION_MONGO_PATH" | "ACCOUNT_VALIDATOR_MONGO_PATH" => {
+            Some("mongodb://localhost/test".into())
+        }
         "REDIS" => Some("localhost".into()),
         "RABBITMQ_QUEUE" => Some("custom-trades".into()),
         _ => None,
@@ -177,7 +179,7 @@ fn required_dependencies_fail_closed_and_cache_fails_open() {
     assert_eq!(cache.requirement, Requirement::Optional);
     assert_eq!(cache.failure_policy, FailurePolicy::Fallback);
     assert!(
-        !dependencies
+        dependencies
             .iter()
             .any(|d| d.name == "mongodb.accountValidator")
     );

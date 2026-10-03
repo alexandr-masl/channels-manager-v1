@@ -87,10 +87,11 @@ pub struct RedisTimeouts {
     pub command: Duration,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MongoConfig {
     pub bot_uri: ConnectionString,
     pub trade_station_uri: ConnectionString,
+    pub account_validator_uri: ConnectionString,
     pub max_pool_size: NonZeroU32,
     pub server_selection_timeout: Duration,
 }
@@ -169,6 +170,7 @@ impl AppConfig {
         let uri = reader.uri("RABBIT_MQ", false)?;
         let bot_uri = reader.uri("MONGO_PATH", true)?;
         let trade_station_uri = reader.uri("TRADE_STATION_MONGO_PATH", true)?;
+        let account_validator_uri = reader.uri("ACCOUNT_VALIDATOR_MONGO_PATH", true)?;
         let host = reader.host("REDIS")?;
         let input = reader.text("CLIENT_TRADE_WORKER_QUEUES", Some(BINGX_FUTURES_QUEUE))?;
         if input != BINGX_FUTURES_QUEUE {
@@ -247,6 +249,7 @@ impl AppConfig {
             mongo: MongoConfig {
                 bot_uri,
                 trade_station_uri,
+                account_validator_uri,
                 max_pool_size: NonZeroU32::new(10).unwrap(),
                 server_selection_timeout: Duration::from_secs(5),
             },

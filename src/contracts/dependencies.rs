@@ -28,6 +28,7 @@ pub fn dependency_contracts() -> Vec<DependencyContract> {
     let mut contracts: Vec<_> = [
         "mongodb.bot",
         "mongodb.tradeStation",
+        "mongodb.accountValidator",
         "mongodb.executionClaims",
         "rabbitmq.connection",
         "rabbitmq.publisher",

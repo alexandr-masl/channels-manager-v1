@@ -8,7 +8,8 @@ connections and does not start consumers or trading logic.
 `AppConfig::from_env()` reads the process environment. `from_lookup()` accepts an
 isolated lookup for tests without mutating global environment variables.
 
-- Required: `RABBIT_MQ`, `MONGO_PATH`, `TRADE_STATION_MONGO_PATH`, `REDIS`.
+- Required: `RABBIT_MQ`, `MONGO_PATH`, `TRADE_STATION_MONGO_PATH`,
+  `ACCOUNT_VALIDATOR_MONGO_PATH`, `REDIS`.
 - Existing environment names and defaults are listed in [`.env.example`](../.env.example).
 - `CONSUMER_PREFETCH` bounds unacknowledged deliveries (default 2, range 1–65535).
   The future worker must enforce that bound when scheduling handlers.
@@ -40,7 +41,7 @@ individual driver and execution deadlines still apply.
 
 | Component | Failure policy |
 | --- | --- |
-| Bot MongoDB, Trading Station MongoDB, claim index | Required; block work |
+| Bot, Trading Station, account-validator MongoDB, claim index | Required; block work |
 | RabbitMQ connection, publisher, BingX consumer | Required; block work |
 | Redis account locks | Required; block work |
 | Redis exchange metadata cache | Optional; fall back to local cache/API |
@@ -48,7 +49,8 @@ individual driver and execution deadlines still apply.
 
 Accepted-signal and command Pub/Sub workflows remain in TypeScript. The Rust worker
 writes trade-result notifications to bot MongoDB. Notification publication failures
-propagate when that workflow is invoked. Account-validator MongoDB remains upstream.
+propagate when that workflow is invoked. Stage 3 adds account-validator MongoDB
+and its lookup repository; TypeScript retains the current eligibility checks.
 
 ## Compatibility
 

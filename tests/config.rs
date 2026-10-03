@@ -10,6 +10,10 @@ fn environment() -> HashMap<String, String> {
             "mongodb://localhost:27017/trading",
         ),
         ("REDIS", "localhost"),
+        (
+            "ACCOUNT_VALIDATOR_MONGO_PATH",
+            "mongodb://localhost:27017/accounts",
+        ),
     ]
     .into_iter()
     .map(|(k, v)| (k.into(), v.into()))
@@ -31,6 +35,10 @@ fn defaults_match_the_typescript_worker() {
     assert_eq!(config.redis.cache.command, Duration::from_millis(500));
     assert_eq!(config.redis.notifications.command, Duration::from_secs(2));
     assert_eq!(config.mongo.max_pool_size.get(), 10);
+    assert_eq!(
+        config.mongo.account_validator_uri.expose(),
+        "mongodb://localhost:27017/accounts"
+    );
     assert_eq!(
         config.runtime.shutdown_drain_timeout,
         Duration::from_secs(10)
@@ -89,6 +97,7 @@ fn required_values_must_be_present_and_nonblank() {
         "RABBIT_MQ",
         "MONGO_PATH",
         "TRADE_STATION_MONGO_PATH",
+        "ACCOUNT_VALIDATOR_MONGO_PATH",
         "REDIS",
     ] {
         for value in [None, Some(""), Some("  ")] {
@@ -125,6 +134,10 @@ fn malformed_explicit_values_fail_instead_of_falling_back() {
         ("RABBIT_MQ", "amqp:///"),
         ("MONGO_PATH", "postgres://localhost/bot"),
         ("MONGO_PATH", "mongodb:///bot"),
+        (
+            "ACCOUNT_VALIDATOR_MONGO_PATH",
+            "postgres://localhost/accounts",
+        ),
         ("REDIS", "redis://localhost"),
         ("REDIS", "localhost:6379"),
     ] {
