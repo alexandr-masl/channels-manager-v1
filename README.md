@@ -62,3 +62,10 @@ tests require `rabbitmq-server`/Erlang; the lifecycle test also uses MongoDB and
 ```sh
 cargo test --test rabbitmq -- --include-ignored
 ```
+
+## Complete verification and cutover
+
+Run `./scripts/verify.sh` with all three service binaries installed. It includes
+all integration tests and matches the GitHub Actions verification job.
+See [verification coverage and rollout](docs/verification-and-rollout.md) for setup,
+acceptance checks, exclusive queue ownership, and rollback.

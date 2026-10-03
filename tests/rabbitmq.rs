@@ -383,6 +383,7 @@ async fn concrete_lifecycle_bounds_workers_and_joins_cleanup() {
 
 struct Broker {
     process: Child,
+    command: Command,
     directory: PathBuf,
     port: u16,
     epmd_port: u16,
@@ -423,42 +424,48 @@ impl Broker {
         std::fs::write(directory.join("env.conf"), "").unwrap();
         std::fs::write(directory.join("plugins"), "[].\n").unwrap();
         let log = std::fs::File::create(directory.join("startup.log")).unwrap();
-        let process = Command::new(
+        let mut command = Command::new(
             std::env::var("RABBITMQ_SERVER_BIN").unwrap_or_else(|_| "rabbitmq-server".into()),
-        )
-        .env("RABBITMQ_CONF_ENV_FILE", directory.join("env.conf"))
-        .env("RABBITMQ_CONFIG_FILE", directory.join("rabbitmq.conf"))
-        .env("RABBITMQ_MNESIA_BASE", directory.join("data"))
-        .env("RABBITMQ_LOG_BASE", directory.join("logs"))
-        .env("RABBITMQ_PID_FILE", directory.join("pid"))
-        .env("RABBITMQ_ENABLED_PLUGINS_FILE", directory.join("plugins"))
-        .env("RABBITMQ_NODENAME", format!("channels_{port}@localhost"))
-        .env("RABBITMQ_NODE_PORT", port.to_string())
-        .env("RABBITMQ_DIST_PORT", dist_port.to_string())
-        .env("ERL_EPMD_PORT", epmd_port.to_string())
-        .env("ERL_EPMD_ADDRESS", "127.0.0.1")
-        .env(
-            "RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS",
-            "+S 2:2 +A 2 -setcookie isolated_channels_test",
-        )
-        .env("RABBITMQ_ALLOW_INPUT", "1")
-        .env("RABBITMQ_SERVER_START_ARGS", "-noshell -noinput")
-        .stdin(Stdio::null())
-        .stdout(log.try_clone().unwrap())
-        .stderr(log)
-        .spawn()
-        .unwrap();
+        );
+        let process = command
+            .env("RABBITMQ_CONF_ENV_FILE", directory.join("env.conf"))
+            .env("RABBITMQ_CONFIG_FILE", directory.join("rabbitmq.conf"))
+            .env("RABBITMQ_MNESIA_BASE", directory.join("data"))
+            .env("RABBITMQ_LOG_BASE", directory.join("logs"))
+            .env("RABBITMQ_PID_FILE", directory.join("pid"))
+            .env("RABBITMQ_ENABLED_PLUGINS_FILE", directory.join("plugins"))
+            .env("RABBITMQ_NODENAME", format!("channels_{port}@localhost"))
+            .env("RABBITMQ_NODE_PORT", port.to_string())
+            .env("RABBITMQ_DIST_PORT", dist_port.to_string())
+            .env("ERL_EPMD_PORT", epmd_port.to_string())
+            .env("ERL_EPMD_ADDRESS", "127.0.0.1")
+            .env(
+                "RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS",
+                "+S 2:2 +A 2 -setcookie isolated_channels_test",
+            )
+            .env("RABBITMQ_ALLOW_INPUT", "1")
+            .env("RABBITMQ_SERVER_START_ARGS", "-noshell -noinput")
+            .stdin(Stdio::null())
+            .stdout(log.try_clone().unwrap())
+            .stderr(log)
+            .spawn()
+            .unwrap();
         let broker = Self {
             process,
+            command,
             directory,
             port,
             epmd_port,
         };
+        broker.wait_ready().await;
+        broker
+    }
+    async fn wait_ready(&self) {
         timeout(Duration::from_secs(40), async {
             loop {
                 if let Ok(Ok(conn)) = timeout(
                     Duration::from_secs(1),
-                    Connection::connect(&broker.uri(), ConnectionProperties::default()),
+                    Connection::connect(&self.uri(), ConnectionProperties::default()),
                 )
                 .await
                 {
@@ -472,10 +479,9 @@ impl Broker {
         .unwrap_or_else(|_| {
             panic!(
                 "RabbitMQ startup failed: {}",
-                std::fs::read_to_string(broker.directory.join("startup.log")).unwrap()
+                std::fs::read_to_string(self.directory.join("startup.log")).unwrap()
             )
         });
-        broker
     }
     fn uri(&self) -> String {
         format!("amqp://guest:guest@127.0.0.1:{}/%2f", self.port)
@@ -1040,7 +1046,7 @@ impl DeliveryHandler for PolicyHandler {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "starts isolated RabbitMQ, MongoDB and Redis; requires loopback access"]
 async fn lifecycle_recovers_idle_disconnect_and_consumer_cancellation() {
-    let broker = Broker::start().await;
+    let mut broker = Broker::start().await;
     let mut stores = Stores::start(&broker.directory).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let proxy_port = listener.local_addr().unwrap().port();
@@ -1093,28 +1099,53 @@ async fn lifecycle_recovers_idle_disconnect_and_consumer_cancellation() {
     let stop = CancellationToken::new();
     let task = tokio::spawn(lifecycle.run(stop.clone()));
     running(&mut phases).await;
-    let admin = Connection::connect(&broker.uri(), ConnectionProperties::default())
+    let mut admin = Connection::connect(&broker.uri(), ConnectionProperties::default())
         .await
         .unwrap();
-    let channel = admin.create_channel().await.unwrap();
+    let mut channel = admin.create_channel().await.unwrap();
     channel
         .confirm_select(ConfirmSelectOptions::default())
         .await
         .unwrap();
-    for cycle in 1..=2 {
+    for cycle in 1..=3 {
         if cycle == 1 {
             disconnect.send_replace(cycle);
-        } else {
+        } else if cycle == 2 {
             channel
                 .queue_delete(BINGX_FUTURES_QUEUE.into(), QueueDeleteOptions::default())
                 .await
                 .unwrap();
+        } else {
+            broker.process.kill().unwrap();
+            broker.process.wait().unwrap();
+            timeout(Duration::from_secs(5), async {
+                loop {
+                    phases.changed().await.unwrap();
+                    if *phases.borrow_and_update() != Phase::Running {
+                        break;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            broker.process = broker.command.spawn().unwrap();
+            broker.wait_ready().await;
+            admin = Connection::connect(&broker.uri(), ConnectionProperties::default())
+                .await
+                .unwrap();
+            channel = admin.create_channel().await.unwrap();
+            channel
+                .confirm_select(ConfirmSelectOptions::default())
+                .await
+                .unwrap();
         }
         timeout(Duration::from_secs(10), async {
-            loop {
-                phases.changed().await.unwrap();
-                if *phases.borrow_and_update() != Phase::Running {
-                    break;
+            if cycle < 3 {
+                loop {
+                    phases.changed().await.unwrap();
+                    if *phases.borrow_and_update() != Phase::Running {
+                        break;
+                    }
                 }
             }
             running(&mut phases).await;
@@ -1319,4 +1350,115 @@ async fn malformed_retry_metadata_cannot_reset_budget() {
             .is_err()
     );
     rabbit.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "starts isolated RabbitMQ, MongoDB and Redis; requires loopback access"]
+async fn startup_outage_preserves_backlog_until_required_dependency_recovers() {
+    let broker = Broker::start().await;
+    let mut stores = Stores::start(&broker.directory).await;
+    let config = stores.config(&broker);
+    let mut setup = RabbitMq::new(config.rabbitmq.clone(), config.runtime.operation_timeout);
+    setup.connect_and_declare().await.unwrap();
+    setup.close().await.unwrap();
+    let admin = Connection::connect(&broker.uri(), ConnectionProperties::default())
+        .await
+        .unwrap();
+    let channel = admin.create_channel().await.unwrap();
+    channel
+        .confirm_select(ConfirmSelectOptions::default())
+        .await
+        .unwrap();
+    seed(&channel, b"backlog before startup").await;
+    stores.redis.kill().unwrap();
+    stores.redis.wait().unwrap();
+    let runtime = config.runtime.clone();
+    let lifecycle = Lifecycle::new(
+        Infrastructure::new(config, Some(Arc::new(PolicyHandler))).unwrap(),
+        runtime,
+    )
+    .unwrap();
+    let mut phases = lifecycle.subscribe();
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(lifecycle.run(stop.clone()));
+    timeout(Duration::from_secs(10), async {
+        loop {
+            let phase = *phases.borrow_and_update();
+            assert_ne!(phase, Phase::Running);
+            if matches!(
+                phase,
+                Phase::Retrying {
+                    stage: channels_manager_v1::runtime::StartupStage::RedisRequired,
+                    ..
+                }
+            ) {
+                break;
+            }
+            phases.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    let queue = channel
+        .queue_declare(
+            BINGX_FUTURES_QUEUE.into(),
+            QueueDeclareOptions {
+                passive: true,
+                ..Default::default()
+            },
+            FieldTable::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(queue.consumer_count(), 0);
+    assert_eq!(queue.message_count(), 1);
+    assert!(
+        channel
+            .basic_get(DEFAULT_TRADE_QUEUE.into(), BasicGetOptions::default())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    stores.redis =
+        Command::new(std::env::var("REDIS_SERVER_BIN").unwrap_or_else(|_| "redis-server".into()))
+            .args([
+                "--bind",
+                "127.0.0.1",
+                "--port",
+                &stores.redis_port.to_string(),
+                "--save",
+                "",
+                "--appendonly",
+                "no",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+    running(&mut phases).await;
+    let result = timeout(Duration::from_secs(3), async {
+        loop {
+            if let Some(message) = channel
+                .basic_get(DEFAULT_TRADE_QUEUE.into(), BasicGetOptions::default())
+                .await
+                .unwrap()
+            {
+                break message;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        result.data,
+        PreparedPublication::trade(&trade(), "work").unwrap().body()
+    );
+    result.ack(BasicAckOptions::default()).await.unwrap();
+    stop.cancel();
+    timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
 }
