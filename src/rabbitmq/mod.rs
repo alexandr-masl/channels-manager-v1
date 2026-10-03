@@ -1,7 +1,9 @@
 //! RabbitMQ transport. Delivery retry policy and trade business logic are separate.
 mod connection;
 mod consumer;
+mod policy;
 mod publication;
+pub use policy::{DeliveryOutcome, DeliveryPolicy, RetryReason};
 mod transport;
 
 pub use connection::{RabbitMq, queue_arguments};

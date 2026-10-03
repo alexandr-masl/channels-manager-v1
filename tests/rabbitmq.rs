@@ -843,3 +843,480 @@ async fn stalled_handshake_is_bounded_and_releases_socket() {
         .expect("timed-out handshake retained socket")
         .unwrap();
 }
+
+#[tokio::test]
+#[ignore = "starts isolated RabbitMQ; requires loopback access"]
+async fn bounded_delivery_retries_preserve_payload_then_dead_letter() {
+    use channels_manager_v1::rabbitmq::{DeliveryOutcome, DeliveryPolicy, RetryReason};
+    let broker = Broker::start().await;
+    let mut config = broker.config();
+    config.rabbitmq.retry_max_attempts = 2.try_into().unwrap();
+    let policy = DeliveryPolicy::new(&config.rabbitmq);
+    let mut rabbit = RabbitMq::new(config.rabbitmq, config.runtime.operation_timeout);
+    rabbit.connect_and_declare().await.unwrap();
+    rabbit.initialize_publisher().await.unwrap();
+    let publisher = rabbit.publisher().unwrap();
+    let mut consumer = rabbit.start_consumer().await.unwrap();
+    let admin = Connection::connect(&broker.uri(), ConnectionProperties::default())
+        .await
+        .unwrap();
+    let channel = admin.create_channel().await.unwrap();
+    channel
+        .confirm_select(ConfirmSelectOptions::default())
+        .await
+        .unwrap();
+    let body = b" {\"expires_at\":123, \"value\":true} ";
+    channel
+        .basic_publish(
+            "".into(),
+            BINGX_FUTURES_QUEUE.into(),
+            BasicPublishOptions::default(),
+            body,
+            BasicProperties::default().with_message_id("".into()),
+        )
+        .await
+        .unwrap()
+        .await
+        .unwrap();
+    let mut first_failure = None;
+    for attempt in 0..=2 {
+        let delivery = timeout(Duration::from_secs(3), consumer.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(delivery.body(), body);
+        assert_eq!(
+            delivery
+                .properties()
+                .message_id()
+                .as_ref()
+                .unwrap()
+                .as_str(),
+            ""
+        );
+        if attempt > 0 {
+            let headers = delivery.properties().headers().as_ref().unwrap();
+            assert_eq!(
+                headers.inner().get(RETRY_ATTEMPT_HEADER),
+                Some(&lapin::types::AMQPValue::LongLongInt(attempt))
+            );
+            let first = headers.inner().get(FIRST_FAILURE_HEADER).unwrap().clone();
+            if let Some(previous) = &first_failure {
+                assert_eq!(previous, &first);
+            }
+            first_failure = Some(first);
+        }
+        policy
+            .settle(
+                delivery,
+                DeliveryOutcome::PreClaimRetry(RetryReason::Timeout),
+                &publisher,
+            )
+            .await
+            .unwrap();
+    }
+    let dead = channel
+        .basic_get(DEAD_LETTER_QUEUE.into(), BasicGetOptions::default())
+        .await
+        .unwrap()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&dead.data).unwrap();
+    assert_eq!(value["attempt"], 3);
+    assert_eq!(value["maxAttempts"], 2);
+    assert_eq!(value["payload"]["expires_at"], 123);
+    assert_eq!(value["error"], "TIMEOUT");
+    dead.ack(BasicAckOptions::default()).await.unwrap();
+    for outcome in [
+        DeliveryOutcome::Completed,
+        DeliveryOutcome::Rejected,
+        DeliveryOutcome::Suppressed,
+        DeliveryOutcome::PostClaimTerminal,
+    ] {
+        seed(&channel, b"terminal").await;
+        let delivery = consumer.next().await.unwrap().unwrap();
+        policy.settle(delivery, outcome, &publisher).await.unwrap();
+    }
+    assert!(
+        timeout(Duration::from_millis(200), consumer.next())
+            .await
+            .is_err()
+    );
+    rabbit.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "starts isolated RabbitMQ; requires loopback access"]
+async fn failed_retry_or_dead_letter_keeps_original_for_recovery() {
+    use channels_manager_v1::rabbitmq::{DeliveryOutcome, DeliveryPolicy, RetryReason};
+    let broker = Broker::start().await;
+    let config = broker.config();
+    let policy = DeliveryPolicy::new(&config.rabbitmq);
+    let admin = Connection::connect(&broker.uri(), ConnectionProperties::default())
+        .await
+        .unwrap();
+    let channel = admin.create_channel().await.unwrap();
+    channel
+        .confirm_select(ConfirmSelectOptions::default())
+        .await
+        .unwrap();
+    for (queue, attempt) in [
+        (format!("{BINGX_FUTURES_QUEUE}{RETRY_SUFFIX}"), 0),
+        (DEAD_LETTER_QUEUE.into(), 5),
+    ] {
+        let mut rabbit = RabbitMq::new(config.rabbitmq.clone(), config.runtime.operation_timeout);
+        rabbit.connect_and_declare().await.unwrap();
+        rabbit.initialize_publisher().await.unwrap();
+        let publisher = rabbit.publisher().unwrap();
+        let mut consumer = rabbit.start_consumer().await.unwrap();
+        channel
+            .queue_delete(queue.into(), QueueDeleteOptions::default())
+            .await
+            .unwrap();
+        let mut headers = FieldTable::default();
+        headers.insert(
+            RETRY_ATTEMPT_HEADER.into(),
+            lapin::types::AMQPValue::LongInt(attempt),
+        );
+        channel
+            .basic_publish(
+                "".into(),
+                BINGX_FUTURES_QUEUE.into(),
+                BasicPublishOptions::default(),
+                b"poison",
+                BasicProperties::default().with_headers(headers),
+            )
+            .await
+            .unwrap()
+            .await
+            .unwrap();
+        let delivery = consumer.next().await.unwrap().unwrap();
+        assert_eq!(
+            policy
+                .settle(
+                    delivery,
+                    DeliveryOutcome::PreClaimRetry(RetryReason::DependencyUnavailable),
+                    &publisher
+                )
+                .await,
+            Err(RabbitError::Unroutable)
+        );
+        assert!(consumer.next().await.is_err(), "failure must gate intake");
+        rabbit.close().await.unwrap();
+        let original = channel
+            .basic_get(BINGX_FUTURES_QUEUE.into(), BasicGetOptions::default())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(original.redelivered);
+        assert_eq!(original.data, b"poison");
+        original.ack(BasicAckOptions::default()).await.unwrap();
+    }
+}
+
+struct PolicyHandler;
+impl DeliveryHandler for PolicyHandler {
+    fn handle(
+        &self,
+        delivery: InboundDelivery,
+        services: WorkerServices,
+    ) -> futures_util::future::BoxFuture<'static, Result<(), RabbitError>> {
+        Box::pin(async move {
+            services
+                .publisher
+                .publish(&PreparedPublication::trade(&trade(), "work")?)
+                .await?;
+            services
+                .delivery_policy
+                .settle(
+                    delivery,
+                    channels_manager_v1::rabbitmq::DeliveryOutcome::Completed,
+                    &services.publisher,
+                )
+                .await
+        })
+    }
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "starts isolated RabbitMQ, MongoDB and Redis; requires loopback access"]
+async fn lifecycle_recovers_idle_disconnect_and_consumer_cancellation() {
+    let broker = Broker::start().await;
+    let mut stores = Stores::start(&broker.directory).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_port = listener.local_addr().unwrap().port();
+    let (disconnect, receiver) = tokio::sync::watch::channel(0u32);
+    let proxy_stop = CancellationToken::new();
+    let stop_proxy = proxy_stop.clone();
+    let broker_port = broker.port;
+    let proxy = tokio::spawn(async move {
+        let mut connections = tokio::task::JoinSet::new();
+        loop {
+            tokio::select! {
+                _=stop_proxy.cancelled()=>break,
+                Some(_)=connections.join_next(),if !connections.is_empty()=>{},
+                accepted=listener.accept()=> {
+                    let (mut client,_) = accepted.unwrap();
+                    let mut changed=receiver.clone();
+                    changed.borrow_and_update();
+                    connections.spawn(async move {
+                        let mut server=tokio::net::TcpStream::connect(("127.0.0.1",broker_port)).await.unwrap();
+                        tokio::select! {
+                            _=changed.changed()=>{},
+                            _=tokio::io::copy_bidirectional(&mut client,&mut server)=>{},
+                        }
+                    });
+                }
+            }
+        }
+        connections.abort_all();
+        while connections.join_next().await.is_some() {}
+    });
+    let mut config = stores.config(&broker);
+    config.rabbitmq.uri = channels_manager_v1::config::AppConfig::from_lookup(|key| match key {
+        "RABBIT_MQ" => Some(format!("amqp://guest:guest@127.0.0.1:{proxy_port}/%2f")),
+        "REDIS" => Some("127.0.0.1".into()),
+        "MONGO_PATH" | "TRADE_STATION_MONGO_PATH" | "ACCOUNT_VALIDATOR_MONGO_PATH" => {
+            Some("mongodb://localhost/test".into())
+        }
+        _ => None,
+    })
+    .unwrap()
+    .rabbitmq
+    .uri;
+    let runtime = config.runtime.clone();
+    let lifecycle = Lifecycle::new(
+        Infrastructure::new(config, Some(Arc::new(PolicyHandler))).unwrap(),
+        runtime,
+    )
+    .unwrap();
+    let mut phases = lifecycle.subscribe();
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(lifecycle.run(stop.clone()));
+    running(&mut phases).await;
+    let admin = Connection::connect(&broker.uri(), ConnectionProperties::default())
+        .await
+        .unwrap();
+    let channel = admin.create_channel().await.unwrap();
+    channel
+        .confirm_select(ConfirmSelectOptions::default())
+        .await
+        .unwrap();
+    for cycle in 1..=2 {
+        if cycle == 1 {
+            disconnect.send_replace(cycle);
+        } else {
+            channel
+                .queue_delete(BINGX_FUTURES_QUEUE.into(), QueueDeleteOptions::default())
+                .await
+                .unwrap();
+        }
+        timeout(Duration::from_secs(10), async {
+            loop {
+                phases.changed().await.unwrap();
+                if *phases.borrow_and_update() != Phase::Running {
+                    break;
+                }
+            }
+            running(&mut phases).await;
+        })
+        .await
+        .unwrap();
+        // Recovery completed while idle, before any publication or job arrives.
+        let queue = channel
+            .queue_declare(
+                BINGX_FUTURES_QUEUE.into(),
+                QueueDeclareOptions {
+                    passive: true,
+                    ..Default::default()
+                },
+                FieldTable::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(queue.consumer_count(), 1);
+        seed(&channel, b"job after recovery").await;
+        let result = timeout(Duration::from_secs(3), async {
+            loop {
+                if let Some(message) = channel
+                    .basic_get(DEFAULT_TRADE_QUEUE.into(), BasicGetOptions::default())
+                    .await
+                    .unwrap()
+                {
+                    break message;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.data,
+            PreparedPublication::trade(&trade(), "work").unwrap().body()
+        );
+        result.ack(BasicAckOptions::default()).await.unwrap();
+    }
+    // Required Redis loss must cancel intake and preserve queued work until recovery.
+    stores.redis.kill().unwrap();
+    stores.redis.wait().unwrap();
+    timeout(Duration::from_secs(5), async {
+        loop {
+            phases.changed().await.unwrap();
+            if *phases.borrow_and_update() != Phase::Running {
+                break;
+            }
+        }
+        loop {
+            let queue = channel
+                .queue_declare(
+                    BINGX_FUTURES_QUEUE.into(),
+                    QueueDeclareOptions {
+                        passive: true,
+                        ..Default::default()
+                    },
+                    FieldTable::default(),
+                )
+                .await
+                .unwrap();
+            if queue.consumer_count() == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    seed(&channel, b"backlog during required outage").await;
+    assert!(
+        channel
+            .basic_get(DEFAULT_TRADE_QUEUE.into(), BasicGetOptions::default())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    stores.redis =
+        Command::new(std::env::var("REDIS_SERVER_BIN").unwrap_or_else(|_| "redis-server".into()))
+            .args([
+                "--bind",
+                "127.0.0.1",
+                "--port",
+                &stores.redis_port.to_string(),
+                "--save",
+                "",
+                "--appendonly",
+                "no",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+    running(&mut phases).await;
+    let result = timeout(Duration::from_secs(3), async {
+        loop {
+            if let Some(message) = channel
+                .basic_get(DEFAULT_TRADE_QUEUE.into(), BasicGetOptions::default())
+                .await
+                .unwrap()
+            {
+                break message;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    result.ack(BasicAckOptions::default()).await.unwrap();
+    stop.cancel();
+    timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    proxy_stop.cancel();
+    proxy.await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "starts isolated RabbitMQ; requires loopback access"]
+async fn malformed_retry_metadata_cannot_reset_budget() {
+    use channels_manager_v1::rabbitmq::{DeliveryOutcome, DeliveryPolicy, RetryReason};
+    use lapin::types::AMQPValue;
+    let broker = Broker::start().await;
+    let config = broker.config();
+    let policy = DeliveryPolicy::new(&config.rabbitmq);
+    let mut rabbit = RabbitMq::new(config.rabbitmq, config.runtime.operation_timeout);
+    rabbit.connect_and_declare().await.unwrap();
+    rabbit.initialize_publisher().await.unwrap();
+    let publisher = rabbit.publisher().unwrap();
+    let mut consumer = rabbit.start_consumer().await.unwrap();
+    let admin = Connection::connect(&broker.uri(), ConnectionProperties::default())
+        .await
+        .unwrap();
+    let channel = admin.create_channel().await.unwrap();
+    channel
+        .confirm_select(ConfirmSelectOptions::default())
+        .await
+        .unwrap();
+    for counter in [
+        AMQPValue::LongInt(-1),
+        AMQPValue::Double(1.5),
+        AMQPValue::LongString("broken".into()),
+        AMQPValue::LongLongInt(i64::MAX),
+    ] {
+        let mut headers = FieldTable::default();
+        headers.insert(RETRY_ATTEMPT_HEADER.into(), counter);
+        headers.insert(RETRY_MAX_ATTEMPTS_HEADER.into(), AMQPValue::LongInt(999));
+        headers.insert("custom".into(), AMQPValue::LongString("keep".into()));
+        let properties = BasicProperties::default()
+            .with_message_id("stable-job".into())
+            .with_headers(headers);
+        channel
+            .basic_publish(
+                "".into(),
+                BINGX_FUTURES_QUEUE.into(),
+                BasicPublishOptions::default(),
+                b"invalid json",
+                properties,
+            )
+            .await
+            .unwrap()
+            .await
+            .unwrap();
+        let delivery = consumer.next().await.unwrap().unwrap();
+        policy
+            .settle(
+                delivery,
+                DeliveryOutcome::PreClaimRetry(RetryReason::ClaimUncertain),
+                &publisher,
+            )
+            .await
+            .unwrap();
+        let dead = channel
+            .basic_get(DEAD_LETTER_QUEUE.into(), BasicGetOptions::default())
+            .await
+            .unwrap()
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&dead.data).unwrap();
+        assert_eq!(value["payload"], "invalid json");
+        assert_eq!(value["maxAttempts"], 5);
+        assert_eq!(
+            dead.properties.message_id().as_ref().unwrap().as_str(),
+            "stable-job"
+        );
+        assert_eq!(
+            dead.properties
+                .headers()
+                .as_ref()
+                .unwrap()
+                .inner()
+                .get("custom"),
+            Some(&AMQPValue::LongString("keep".into()))
+        );
+        dead.ack(BasicAckOptions::default()).await.unwrap();
+    }
+    assert!(
+        timeout(Duration::from_millis(200), consumer.next())
+            .await
+            .is_err()
+    );
+    rabbit.close().await.unwrap();
+}

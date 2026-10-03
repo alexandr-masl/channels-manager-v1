@@ -86,7 +86,9 @@ impl PreparedPublication {
         mut headers: FieldTable,
         expires_at: Option<u64>,
     ) -> Result<Self, RabbitError> {
-        if id.is_some_and(|id| id.is_empty() || id.len() > 255) {
+        if id.is_some_and(|id| {
+            id.len() > 255 || (id.is_empty() && !matches!(destination, Destination::Retry))
+        }) {
             return Err(RabbitError::InvalidPayload);
         }
         let now = now_ms();
@@ -108,6 +110,12 @@ impl PreparedPublication {
             properties,
             expires_at,
         })
+    }
+    pub(super) fn set_retry_metadata(&mut self, id: Option<&str>, headers: FieldTable) {
+        self.properties = self.properties.clone().with_headers(headers);
+        if let Some(id) = id {
+            self.properties = self.properties.clone().with_message_id(id.into());
+        }
     }
     pub fn body(&self) -> &[u8] {
         &self.body

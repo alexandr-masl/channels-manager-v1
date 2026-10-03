@@ -1,8 +1,8 @@
 # RabbitMQ
 
-Slice 5 provides RabbitMQ transport and the concrete infrastructure lifecycle.
-All inter-app messaging uses RabbitMQ. Delivery retry/DLQ decisions arrive in
-slice 6; BingX trade admission and construction remain separate work.
+Slices 5–6 provide RabbitMQ transport, recovery, and delivery policy.
+All inter-app messaging uses RabbitMQ. BingX trade admission and construction
+remain separate work.
 
 ## Connections and queues
 
@@ -48,6 +48,37 @@ See [RabbitMQ acknowledgements and confirms](https://www.rabbitmq.com/docs/confi
 Admission, raw delayed-retry, and dead-letter publication constructors expose
 the transport primitives. They do not choose retry attempts or delivery outcomes.
 
+## Delivery outcomes
+
+`WorkerServices::delivery_policy` settles explicit `DeliveryOutcome` values:
+
+| Outcome | Settlement |
+| --- | --- |
+| Completed, rejected, suppressed | Acknowledge |
+| Post-claim terminal | Acknowledge after the handler records the terminal claim |
+| Pre-claim retry | Confirm delayed retry, then acknowledge original |
+| Retry budget exhausted | Confirm diagnostic DLQ publication, then acknowledge original |
+| Retry/DLQ return, nack, timeout or disconnect | Leave original unacknowledged, fault session and recover with backoff |
+
+A timeout before claiming can produce `PreClaimRetry(Timeout)`. After claiming,
+timeouts, lease loss and uncertain trade publication are terminal business
+outcomes. The handler owns claim recording and classification; the transport
+never infers execution phase from an error string. An unsettled delivery dropped
+on cancellation returns through broker recovery and must pass Mongo claim checks
+again. The non-TTL claim prevents executing claimed work again.
+
+Retry defaults are five delayed attempts at one second each. The configured
+maximum overrides incoming metadata. Invalid counters go directly to diagnostics.
+Each retry retains original body bytes, expiry, message ID and custom headers;
+first/last failure times and attempt headers follow the TypeScript contract.
+Error metadata uses fixed codes, avoiding credentials in driver error strings.
+DLQ payloads retain the original JSON value (or text for malformed JSON).
+
+A confirmation and acknowledgement are separate operations: disconnect between
+them can produce duplicates. Claims and stable IDs remain required. No automatic
+trade replay is performed. Non-durable queues and non-persistent messages retain
+the existing ephemeral delivery guarantees.
+
 ## Consumers and lifecycle
 
 Consumers use manual acknowledgements and per-consumer prefetch. `InboundDelivery`
@@ -56,7 +87,7 @@ Dropping an unsettled delivery faults the session; channel closure returns
 unacknowledged messages to the broker. No handler result implicitly acknowledges.
 
 `Infrastructure` accepts an optional `DeliveryHandler` with access to MongoDB,
-account leases, metadata cache, and publishing. Active handlers are independently
+account leases, metadata cache, publishing, and delivery policy. Active handlers are independently
 bounded by prefetch. Quiesce stops intake; drain awaits handlers and settlement;
 flush waits for active publications. Failed/aborted handlers are joined before
 connections close. Handler futures must not detach background work.
@@ -76,4 +107,8 @@ temporary data directories, and private ports. Install RabbitMQ/Erlang or set
 Tests cover queue compatibility, confirmed/returned/rejected publications, expiry,
 immutable bytes, retry TTL routing, prefetch, settlement/redelivery, consumer
 cancellation, idle connection failure, missing confirmations, stalled handshake
-cleanup, handler concurrency, and graceful/forced shutdown.
+cleanup, handler concurrency, and graceful/forced shutdown. Slice 6 additionally
+verifies capped retries, malformed metadata, DLQ publication failures, original
+redelivery, and automatic idle disconnect/consumer-cancellation recovery before
+any new traffic arrives. Required Redis outage tests verify intake cancellation
+and backlog processing only after dependency recovery.

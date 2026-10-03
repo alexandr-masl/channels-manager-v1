@@ -46,6 +46,9 @@ pub struct InboundDelivery {
     settled: bool,
 }
 impl InboundDelivery {
+    pub(super) fn fail(&self, error: RabbitError) {
+        self.session.fail(error);
+    }
     pub fn body(&self) -> &[u8] {
         &self.delivery.data
     }

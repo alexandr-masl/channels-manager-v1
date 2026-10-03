@@ -2,7 +2,7 @@
 use crate::{
     config::AppConfig,
     mongo::{MongoConnections, MongoRepositories},
-    rabbitmq::{InboundDelivery, Publisher, RabbitError, RabbitMq},
+    rabbitmq::{DeliveryPolicy, InboundDelivery, Publisher, RabbitError, RabbitMq},
     redis::{LeaseManager, MetadataCache, RedisConnections},
     runtime::{Failure, LifecycleAdapter, ShutdownStep, StartupStage},
 };
@@ -17,10 +17,12 @@ pub struct WorkerServices {
     pub locks: LeaseManager,
     pub metadata: MetadataCache,
     pub publisher: Publisher,
+    pub delivery_policy: DeliveryPolicy,
 }
 
 /// The handler explicitly settles each delivery. It must keep all work in the
-/// returned future so drain/abort can govern it. Retry policy arrives in slice 6.
+/// returned future so drain/abort can govern it. Use services.delivery_policy to
+/// settle typed execution outcomes; only pre-claim failures may retry.
 pub trait DeliveryHandler: Send + Sync + 'static {
     fn handle(
         &self,
@@ -36,6 +38,7 @@ pub struct Infrastructure {
     workers: Option<JoinHandle<Result<(), RabbitError>>>,
     workers_abort: CancellationToken,
     concurrency: usize,
+    delivery_policy: DeliveryPolicy,
 }
 impl Infrastructure {
     /// Without a handler, opens infrastructure and declares queues but never consumes jobs.
@@ -47,6 +50,7 @@ impl Infrastructure {
             mongo: MongoConnections::new(config.mongo, config.runtime.operation_timeout),
             redis: RedisConnections::new(config.redis, &config.runtime).map_err(Failure::from)?,
             concurrency: config.rabbitmq.prefetch.get() as usize,
+            delivery_policy: DeliveryPolicy::new(&config.rabbitmq),
             rabbit: RabbitMq::new(config.rabbitmq, config.runtime.operation_timeout),
             handler,
             workers: None,
@@ -71,6 +75,7 @@ impl Infrastructure {
             locks: self.redis.locks(),
             metadata: self.redis.cache(),
             publisher: self.rabbit.publisher().map_err(Failure::from)?,
+            delivery_policy: self.delivery_policy.clone(),
         };
         let mut consumer = self.rabbit.start_consumer().await.map_err(Failure::from)?;
         // Registration may await the broker; recheck latched failures before
