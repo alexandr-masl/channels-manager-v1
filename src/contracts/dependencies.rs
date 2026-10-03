@@ -4,7 +4,6 @@
 pub enum Requirement {
     Required,
     Optional,
-    OnUse,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,8 +12,6 @@ pub enum FailurePolicy {
     BlockWork,
     /// Use local cache or exchange lookup if shared caching fails.
     Fallback,
-    /// Publish failure propagates when this optional workflow is invoked.
-    FailOperation,
 }
 
 #[derive(Debug)]
@@ -46,13 +43,6 @@ pub fn dependency_contracts() -> Vec<DependencyContract> {
         name: "redis.exchangeMetadataCache",
         requirement: Requirement::Optional,
         failure_policy: FailurePolicy::Fallback,
-    });
-    // Accepted-signal/command publication remains upstream. Pub/Sub failures
-    // propagate only when the notification workflow is invoked.
-    contracts.push(DependencyContract {
-        name: "redis.notifications",
-        requirement: Requirement::OnUse,
-        failure_policy: FailurePolicy::FailOperation,
     });
     contracts
 }

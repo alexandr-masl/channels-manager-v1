@@ -141,7 +141,7 @@ pub trait LifecycleAdapter: Send {
     fn shutdown(&mut self, step: ShutdownStep) -> impl Future<Output = Result<(), Failure>> + Send;
 
     /// Wait for a required component failure, including failures latched during
-    /// startup. Optional cache/on-use notification failures stay in their adapters.
+    /// startup. Optional cache failures stay in the cache adapter.
     /// Must be cancellation-safe and must not consume a failure until returned.
     fn wait_for_failure(&mut self) -> impl Future<Output = Failure> + Send;
 }

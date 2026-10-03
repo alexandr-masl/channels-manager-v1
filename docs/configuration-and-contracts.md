@@ -45,12 +45,12 @@ individual driver and execution deadlines still apply.
 | RabbitMQ connection, publisher, BingX consumer | Required; block work |
 | Redis account locks | Required; block work |
 | Redis exchange metadata cache | Optional; fall back to local cache/API |
-| Redis notification publisher | Required when used; propagate failure |
 
-Accepted-signal and command Pub/Sub workflows remain in TypeScript. The Rust worker
-writes trade-result notifications to bot MongoDB. Notification publication failures
-propagate when that workflow is invoked. Stage 3 adds account-validator MongoDB
-and its lookup repository; TypeScript retains the current eligibility checks.
+All app-to-app communication uses RabbitMQ. Redis provides cross-pod locks and
+optional shared API metadata caching. `EXCHANGE_METADATA_CACHE_ENABLED=false`
+disables the cache connection. The Rust worker writes trade-result notification
+records to bot MongoDB. Stage 3 adds account-validator MongoDB and its lookup
+repository; TypeScript retains the current eligibility checks.
 
 ## Compatibility
 

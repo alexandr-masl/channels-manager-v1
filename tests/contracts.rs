@@ -135,7 +135,11 @@ fn redis_keys_match_encode_uri_component_in_typescript() {
         bingx_metadata_key(DEFAULT_CACHE_PREFIX, "BTC-USDT"),
         "satoshi-channel-updates:exchange-metadata:v1:bingx_symbol_metadata:BTC-USDT"
     );
-    assert_eq!(REDIS_NOTIFICATION_CHANNEL, "satoshiChannelCommand");
+    assert!(
+        !dependency_contracts()
+            .iter()
+            .any(|d| d.name == "redis.notifications")
+    );
     assert_eq!(ACCOUNT_LEASE_TTL.as_secs(), 30);
     assert_eq!(ACCOUNT_LEASE_RENEWAL.as_secs(), 10);
 }
@@ -201,7 +205,7 @@ fn additional_trade_envelope_fields_are_rejected() {
 }
 
 #[test]
-fn admission_event_and_notification_preserve_wire_field_names() {
+fn admission_event_preserves_wire_field_names() {
     let value = json!({
         "eventType":"BINGX_FUTURES_POSITION_MODE_ACTION_REQUIRED",
         "eventId":"fixture-event", "chatId":42, "exchangeClientId":"account-1",
@@ -212,16 +216,6 @@ fn admission_event_and_notification_preserve_wire_field_names() {
     });
     let event: PositionModeActionRequired = serde_json::from_value(value.clone()).unwrap();
     assert_eq!(serde_json::to_value(event).unwrap(), value);
-    let notification = AcceptedSignalNotification {
-        channel_id: -100,
-        message_id: 7,
-        trade_created: true,
-        symbol: "BTCUSDT".into(),
-    };
-    assert_eq!(
-        serde_json::to_value(notification).unwrap(),
-        json!({"channel_id":-100,"message_id":7,"tradeCreated":true,"symbol":"BTCUSDT"})
-    );
     assert_eq!(
         serde_json::to_value(ExecutionRoute::Hedge).unwrap(),
         "ORDER_LEDGER_V1"

@@ -45,3 +45,11 @@ databases. Run its isolated integration test with a local `mongod` installed:
 ```sh
 cargo test --test mongodb -- --ignored
 ```
+
+Slice 4 provides [Redis cross-pod locks and optional API caching](docs/redis.md).
+All app-to-app communication uses RabbitMQ. Run isolated Redis tests with a local
+`redis-server` installed:
+
+```sh
+cargo test --test redis -- --ignored
+```

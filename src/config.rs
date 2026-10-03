@@ -69,19 +69,19 @@ pub struct ReconnectConfig {
     pub jitter_ratio: f64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RedisConfig {
     pub host: String,
     pub port: NonZeroU16,
     pub locks: RedisTimeouts,
-    pub notifications: RedisTimeouts,
+    pub cache_enabled: bool,
     pub cache: RedisTimeouts,
     pub lock_prefix: String,
     pub cache_prefix: String,
     pub metadata_cache_ttl: Duration,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RedisTimeouts {
     pub connect: Duration,
     pub command: Duration,
@@ -233,10 +233,7 @@ impl AppConfig {
                     connect: reader.duration("REDIS_LOCK_CONNECT_TIMEOUT_MS", 1000)?,
                     command: reader.duration("REDIS_LOCK_COMMAND_TIMEOUT_MS", 1000)?,
                 },
-                notifications: RedisTimeouts {
-                    connect: reader.duration("REDIS_NOTIFICATION_CONNECT_TIMEOUT_MS", 2000)?,
-                    command: reader.duration("REDIS_NOTIFICATION_COMMAND_TIMEOUT_MS", 2000)?,
-                },
+                cache_enabled: reader.boolean("EXCHANGE_METADATA_CACHE_ENABLED", true)?,
                 cache: RedisTimeouts {
                     connect: reader.duration("REDIS_CACHE_CONNECT_TIMEOUT_MS", 1000)?,
                     command: reader.duration("REDIS_CACHE_COMMAND_TIMEOUT_MS", 500)?,

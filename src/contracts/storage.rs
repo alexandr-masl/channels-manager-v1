@@ -3,7 +3,6 @@ use std::time::Duration;
 
 pub const DEFAULT_LOCK_PREFIX: &str = "satoshi-channel-updates:locks:v1";
 pub const DEFAULT_CACHE_PREFIX: &str = "satoshi-channel-updates:exchange-metadata:v1";
-pub const REDIS_NOTIFICATION_CHANNEL: &str = "satoshiChannelCommand";
 pub const ACCOUNT_LEASE_TTL: Duration = Duration::from_secs(30);
 pub const ACCOUNT_LEASE_RENEWAL: Duration = Duration::from_secs(10);
 pub const ACCOUNT_LEASE_COMMAND_TIMEOUT: Duration = Duration::from_secs(1);

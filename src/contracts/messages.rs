@@ -175,12 +175,3 @@ pub struct DeadLetterMessage {
     pub max_attempts: u32,
     pub dead_lettered_at: String,
 }
-
-#[derive(Serialize, Deserialize)]
-pub struct AcceptedSignalNotification {
-    pub channel_id: i64,
-    pub message_id: i64,
-    #[serde(rename = "tradeCreated")]
-    pub trade_created: bool,
-    pub symbol: String,
-}

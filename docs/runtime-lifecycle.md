@@ -27,8 +27,8 @@ repeats startup. Failed cleanup terminates the run to avoid overlapping consumer
 No new delivery or publish is needed to trigger recovery. Recovery attempts reset
 after a running period of at least `STARTUP_RETRY_MAX_DELAY_MS`.
 
-Optional cache failures and on-use notification failures remain local to those
-adapters. Internal `Phase` subscriptions report the coordinator's current phase.
+Optional cache failures remain local to the cache adapter. Internal `Phase`
+subscriptions report the coordinator's current phase.
 
 ## Shutdown
 
@@ -80,7 +80,9 @@ and awaits `run_until_signal` inside Tokio. No production placeholder adapter is
 
 The [MongoDB module](mongodb.md) now provides `connect`, `initialize_indexes`,
 and `close` for the corresponding lifecycle stages. Full adapter composition
-follows with Redis and RabbitMQ.
+follows with RabbitMQ. The [Redis module](redis.md) provides required connection
+startup, a latched failure signal, acquisition gating, and shutdown. Quiescing
+keeps lease renewal alive until worker drain completes.
 
 ## Verification
 

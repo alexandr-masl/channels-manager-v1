@@ -9,6 +9,19 @@ use url::Url;
 pub(super) struct Reader<F>(pub F);
 
 impl<F: Fn(&'static str) -> Result<Option<String>, ConfigError>> Reader<F> {
+    pub fn boolean(&self, key: &'static str, default: bool) -> Result<bool, ConfigError> {
+        match self
+            .text(key, Some(if default { "true" } else { "false" }))?
+            .as_str()
+        {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            _ => Err(ConfigError {
+                setting: key,
+                reason: "must be true or false",
+            }),
+        }
+    }
     pub fn text(&self, key: &'static str, default: Option<&str>) -> Result<String, ConfigError> {
         let value = (self.0)(key)?
             .or_else(|| default.map(str::to_owned))

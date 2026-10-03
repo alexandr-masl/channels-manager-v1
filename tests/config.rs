@@ -33,7 +33,7 @@ fn defaults_match_the_typescript_worker() {
     assert_eq!(config.rabbitmq.reconnect.jitter_ratio, 0.2);
     assert_eq!(config.redis.port.get(), 6379);
     assert_eq!(config.redis.cache.command, Duration::from_millis(500));
-    assert_eq!(config.redis.notifications.command, Duration::from_secs(2));
+    assert!(config.redis.cache_enabled);
     assert_eq!(config.mongo.max_pool_size.get(), 10);
     assert_eq!(
         config.mongo.account_validator_uri.expose(),
@@ -65,6 +65,25 @@ fn runtime_limits_are_validated_before_startup() {
         let error = AppConfig::from_lookup(|k| env.get(k).cloned()).unwrap_err();
         assert_eq!(error.setting, key);
     }
+}
+
+#[test]
+fn shared_api_cache_can_be_disabled_and_rejects_invalid_flags() {
+    let mut env = environment();
+    env.insert("EXCHANGE_METADATA_CACHE_ENABLED".into(), "false".into());
+    assert!(
+        !AppConfig::from_lookup(|k| env.get(k).cloned())
+            .unwrap()
+            .redis
+            .cache_enabled
+    );
+    env.insert("EXCHANGE_METADATA_CACHE_ENABLED".into(), "maybe".into());
+    assert_eq!(
+        AppConfig::from_lookup(|k| env.get(k).cloned())
+            .unwrap_err()
+            .setting,
+        "EXCHANGE_METADATA_CACHE_ENABLED"
+    );
 }
 
 #[test]
