@@ -95,11 +95,55 @@ pub struct MongoConfig {
     pub server_selection_timeout: Duration,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RuntimeConfig {
     pub startup_retry_delay: Duration,
+    pub startup_retry_max_delay: Duration,
+    pub startup_retry_jitter_ratio: f64,
+    pub operation_timeout: Duration,
     pub shutdown_drain_timeout: Duration,
+    pub shutdown_timeout: Duration,
     pub service_revision: String,
+}
+
+impl RuntimeConfig {
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        for (setting, value) in [
+            ("STARTUP_RETRY_DELAY_MS", self.startup_retry_delay),
+            ("STARTUP_RETRY_MAX_DELAY_MS", self.startup_retry_max_delay),
+            ("RUNTIME_OPERATION_TIMEOUT_MS", self.operation_timeout),
+            ("SHUTDOWN_DRAIN_TIMEOUT_MS", self.shutdown_drain_timeout),
+            ("SHUTDOWN_TIMEOUT_MS", self.shutdown_timeout),
+        ] {
+            if value < Duration::from_millis(1) || value > Duration::from_millis(i32::MAX as u64) {
+                return Err(ConfigError {
+                    setting,
+                    reason: "must be milliseconds between 1 and 2147483647",
+                });
+            }
+        }
+        if self.startup_retry_max_delay < self.startup_retry_delay {
+            return Err(ConfigError {
+                setting: "STARTUP_RETRY_MAX_DELAY_MS",
+                reason: "must be at least STARTUP_RETRY_DELAY_MS",
+            });
+        }
+        if !self.startup_retry_jitter_ratio.is_finite()
+            || !(0.0..=1.0).contains(&self.startup_retry_jitter_ratio)
+        {
+            return Err(ConfigError {
+                setting: "STARTUP_RETRY_JITTER_RATIO",
+                reason: "must be a finite number between 0 and 1",
+            });
+        }
+        if self.shutdown_timeout <= self.shutdown_drain_timeout {
+            return Err(ConfigError {
+                setting: "SHUTDOWN_TIMEOUT_MS",
+                reason: "must exceed SHUTDOWN_DRAIN_TIMEOUT_MS to allow resource cleanup",
+            });
+        }
+        Ok(())
+    }
 }
 
 impl AppConfig {
@@ -159,6 +203,16 @@ impl AppConfig {
                 reason: "must be at least RABBITMQ_RECONNECT_BASE_MS",
             });
         }
+        let runtime = RuntimeConfig {
+            startup_retry_delay: reader.duration("STARTUP_RETRY_DELAY_MS", 5000)?,
+            startup_retry_max_delay: reader.duration("STARTUP_RETRY_MAX_DELAY_MS", 30000)?,
+            startup_retry_jitter_ratio: reader.ratio("STARTUP_RETRY_JITTER_RATIO", 0.2)?,
+            operation_timeout: reader.duration("RUNTIME_OPERATION_TIMEOUT_MS", 10000)?,
+            shutdown_drain_timeout: reader.duration("SHUTDOWN_DRAIN_TIMEOUT_MS", 10000)?,
+            shutdown_timeout: reader.duration("SHUTDOWN_TIMEOUT_MS", 30000)?,
+            service_revision: reader.text("SERVICE_REVISION", Some("channels-manager-v1"))?,
+        };
+        runtime.validate()?;
         Ok(Self {
             rabbitmq: RabbitMqConfig {
                 uri,
@@ -196,11 +250,7 @@ impl AppConfig {
                 max_pool_size: NonZeroU32::new(10).unwrap(),
                 server_selection_timeout: Duration::from_secs(5),
             },
-            runtime: RuntimeConfig {
-                startup_retry_delay: reader.duration("STARTUP_RETRY_DELAY_MS", 5000)?,
-                shutdown_drain_timeout: reader.duration("SHUTDOWN_DRAIN_TIMEOUT_MS", 10000)?,
-                service_revision: reader.text("SERVICE_REVISION", Some("channels-manager-v1"))?,
-            },
+            runtime,
         })
     }
 }

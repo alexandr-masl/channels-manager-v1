@@ -4,7 +4,7 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     match AppConfig::from_env() {
         Ok(_config) => {
-            println!("Configuration valid. Infrastructure connections are not started in stage 1.");
+            println!("Configuration valid. Infrastructure adapters are not connected yet.");
             ExitCode::SUCCESS
         }
         Err(error) => {

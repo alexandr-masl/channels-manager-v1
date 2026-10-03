@@ -35,6 +35,28 @@ fn defaults_match_the_typescript_worker() {
         config.runtime.shutdown_drain_timeout,
         Duration::from_secs(10)
     );
+    assert_eq!(config.runtime.operation_timeout, Duration::from_secs(10));
+    assert_eq!(config.runtime.shutdown_timeout, Duration::from_secs(30));
+    assert_eq!(
+        config.runtime.startup_retry_max_delay,
+        Duration::from_secs(30)
+    );
+    assert_eq!(config.runtime.startup_retry_jitter_ratio, 0.2);
+}
+
+#[test]
+fn runtime_limits_are_validated_before_startup() {
+    for (key, value) in [
+        ("RUNTIME_OPERATION_TIMEOUT_MS", "0"),
+        ("SHUTDOWN_TIMEOUT_MS", "10000"),
+        ("STARTUP_RETRY_MAX_DELAY_MS", "1000"),
+        ("STARTUP_RETRY_JITTER_RATIO", "NaN"),
+    ] {
+        let mut env = environment();
+        env.insert(key.into(), value.into());
+        let error = AppConfig::from_lookup(|k| env.get(k).cloned()).unwrap_err();
+        assert_eq!(error.setting, key);
+    }
 }
 
 #[test]

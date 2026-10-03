@@ -34,3 +34,7 @@ cargo clippy --all-targets -- -D warnings
 
 See [configuration and contracts](docs/configuration-and-contracts.md) for defaults,
 compatibility boundaries, and dependency requirements.
+
+The [runtime lifecycle](docs/runtime-lifecycle.md) coordinator implements ordered
+startup, recovery, SIGINT/SIGTERM cancellation, and bounded shutdown. Concrete
+infrastructure adapters and their connection to `main` follow in stages 3–5.

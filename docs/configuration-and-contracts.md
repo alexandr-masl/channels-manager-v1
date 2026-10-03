@@ -32,6 +32,10 @@ account lease TTL/renewal/command/acquisition 30s/10s/1s/5s;
 protected execution/cleanup deadlines 90s/2s. `PROCESSING_LOCK_TTL_MS` belongs to
 the legacy generic lock and does not override the BingX account lease.
 
+The [runtime coordinator](runtime-lifecycle.md) adds configurable startup backoff,
+operation deadlines, and a total shutdown deadline. These are orchestration limits;
+individual driver and execution deadlines still apply.
+
 ## Dependency requirements
 
 | Component | Failure policy |
