@@ -6,6 +6,7 @@ The app connects MongoDB, Redis, and RabbitMQ through the runtime lifecycle.
 The executable currently logs and acknowledges raw Telegram messages from
 `tg_bot_channel_update`. BingX Futures trade processing follows separately.
 See [AGENTS.md](AGENTS.md) for the migration boundary and source-of-truth documentation.
+The proposed workflows and module layout are in [application architecture](docs/architecture.md).
 
 ## Development
 
