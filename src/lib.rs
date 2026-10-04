@@ -5,3 +5,4 @@ pub mod mongo;
 pub mod rabbitmq;
 pub mod redis;
 pub mod runtime;
+pub mod telegram;

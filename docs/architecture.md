@@ -4,7 +4,9 @@
 
 Keep this document current as implementation decisions change. The TypeScript
 `satoshi-channel-updates-manager` remains the behavioral source of truth.
-Today, Rust connects infrastructure and logs/acknowledges raw Telegram messages.
+Implemented through issue #2 slice 1: typed Telegram intake validates structure
+and source time, logs accepted text or a skip/rejection reason, and acknowledges.
+Signal parsing, channel authorization and job fan-out remain planned.
 The workflows below extend the initial client-job migration to include signal intake.
 
 ## Workflows
@@ -58,7 +60,8 @@ keep parsing and calculations testable without network access.
 - Partial fan-out and lost acknowledgements can duplicate jobs; claims suppress repeated execution.
 - Redis carries no inter-app messages. All inter-app communication uses RabbitMQ.
 - Coordinate exclusive queue ownership with TypeScript during migration.
-- Replace the temporary input-queue override in `main.rs` with explicit consumer wiring.
+- `Infrastructure::for_telegram_intake` selects the raw queue and handler explicitly;
+  the general constructor retains the separate BingX job contract.
 
 ## Implementation order
 
@@ -101,3 +104,14 @@ src/
   rabbitmq/                   # Existing transport and delivery policy
   contracts/                  # External message formats
 ```
+
+## Intake validation (slice 1)
+
+Require integer `message_id`, `date` (Unix seconds), and `chat.id`/`chat.type`.
+Identifiers must fit JavaScript's safe integer range; message IDs must be positive
+and chat IDs nonzero. Allow additional Telegram fields. Accept source timestamps
+up to 10 minutes old or 2 minutes ahead, inclusive, using existing contract limits.
+Skip non-channel messages, replies and absent/blank text. Reject malformed
+payloads or invalid timestamps without logging their contents. Accepted text is
+escaped for terminal output. This stage logs and acknowledges; it does not claim
+channel authorization or signal validity.

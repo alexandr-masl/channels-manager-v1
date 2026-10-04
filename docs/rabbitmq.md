@@ -92,10 +92,13 @@ bounded by prefetch. Quiesce stops intake; drain awaits handlers and settlement;
 flush waits for active publications. Failed/aborted handlers are joined before
 connections close. Handler futures must not detach background work.
 
-The executable currently supplies a logging handler for `tg_bot_channel_update`.
-It prints and acknowledges raw Telegram messages. Its input queue is explicitly
-selected in `main`; the library retains the BingX client-job default. This logger
-does not parse signals or publish trades. See the README for the example sender. `cargo run -- --check-config` validates
+The executable uses `Infrastructure::for_telegram_intake` to select
+`tg_bot_channel_update`, its retry topology, and `TelegramHandler` together.
+The general constructor retains the BingX client-job default. Intake decodes and
+validates the envelope and source time, logs known fields, then acknowledges.
+Rejected messages log a sanitized reason; non-text posts, replies, and other chat
+types are skipped. Signal parsing and authorization follow in later slices.
+See the README for the example sender. `cargo run -- --check-config` validates
 configuration without opening connections. Coordinated queue ownership is still
 required when the eventual Rust worker takes over from TypeScript.
 

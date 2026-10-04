@@ -41,6 +41,13 @@ pub struct Infrastructure {
     delivery_policy: DeliveryPolicy,
 }
 impl Infrastructure {
+    /// Select raw Telegram topology, retry policy, and handler together. The
+    /// general constructor retains the configured BingX client-job boundary.
+    pub fn for_telegram_intake(mut config: AppConfig) -> Result<Self, Failure> {
+        config.rabbitmq.input_queue = crate::contracts::rabbitmq::TELEGRAM_CHANNEL_QUEUE;
+        Self::new(config, Some(Arc::new(crate::telegram::TelegramHandler)))
+    }
+
     /// Without a handler, opens infrastructure and declares queues but never consumes jobs.
     pub fn new(
         config: AppConfig,

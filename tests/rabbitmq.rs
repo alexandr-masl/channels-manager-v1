@@ -1527,7 +1527,7 @@ async fn binary_logs_raw_telegram_signal_and_acknowledges() {
         .confirm_select(ConfirmSelectOptions::default())
         .await
         .unwrap();
-    let body = serde_json::to_vec(&json!({"message_id":7,"date":1791056304,"chat":{"id":-1001596367704i64,"type":"channel"},"text":include_str!("../examples/fixtures/ada-signal.txt").trim_end()})).unwrap();
+    let body = serde_json::to_vec(&json!({"message_id":7,"date":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),"chat":{"id":-1001596367704i64,"type":"channel"},"text":include_str!("../examples/fixtures/ada-signal.txt").trim_end()})).unwrap();
     channel
         .basic_publish(
             "".into(),
@@ -1553,6 +1553,15 @@ async fn binary_logs_raw_telegram_signal_and_acknowledges() {
     assert!(line.contains("ADA/USDT"));
     assert!(line.contains("0.2570"));
     assert!(line.contains("-1001596367704"));
+    for (body, expected) in [
+        (br#"{"text":"private-payload-without-envelope"}"#.to_vec(), "Telegram intake rejected: InvalidEnvelope"),
+        (serde_json::to_vec(&json!({"message_id":8,"date":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),"chat":{"id":-1001596367704i64,"type":"channel"}})).unwrap(), "Telegram intake skipped: NoText"),
+    ] {
+        channel.basic_publish("".into(), TELEGRAM_CHANNEL_QUEUE.into(), BasicPublishOptions::default(), &body, BasicProperties::default()).await.unwrap().await.unwrap();
+        let line = timeout(Duration::from_secs(3), lines.recv()).await.unwrap().unwrap();
+        assert_eq!(line, expected);
+        assert!(!line.contains("private-payload"));
+    }
     // Graceful drain completes settlement before closing the channel.
     Command::new("kill")
         .args(["-INT", &process.0.id().to_string()])

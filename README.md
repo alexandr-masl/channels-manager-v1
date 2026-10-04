@@ -3,8 +3,8 @@
 Rust application for the incremental migration of `satoshi-channel-updates-manager`.
 
 The app connects MongoDB, Redis, and RabbitMQ through the runtime lifecycle.
-The executable currently logs and acknowledges raw Telegram messages from
-`tg_bot_channel_update`. BingX Futures trade processing follows separately.
+The executable validates Telegram envelopes/source timestamps, then logs and
+acknowledges messages from `tg_bot_channel_update`. BingX Futures trade processing follows separately.
 See [AGENTS.md](AGENTS.md) for the migration boundary and source-of-truth documentation.
 The proposed workflows and module layout are in [application architecture](docs/architecture.md).
 
@@ -87,9 +87,11 @@ cargo run --example send_telegram_signal -- -1001596367704
 The sender uses `.env.local`, your ADA signal text, a fresh message ID/date, and
 channel ID `-1001596367704`. It publishes to the original bot queue
 `tg_bot_channel_update` on a local broker with confirms and a 60-second TTL.
-The app prints the incoming body and acknowledges it; no parsing or trades run.
+The app validates the envelope and source time, prints the message text and IDs,
+and acknowledges it. Invalid messages get a rejection reason; non-text posts and
+replies are skipped. Signal parsing and trades are not implemented yet.
 `CLIENT_TRADE_WORKER_QUEUES` describes the later BingX client-job boundary and is
-not the queue used by this temporary raw-message logger.
+not the queue selected by `Infrastructure::for_telegram_intake`.
 
 Use a local broker/vhost without the TypeScript consumer: consumers sharing the
 same queue compete for messages. This logger acknowledges messages after logging.
