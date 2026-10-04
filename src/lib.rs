@@ -6,3 +6,5 @@ pub mod rabbitmq;
 pub mod redis;
 pub mod runtime;
 pub mod telegram;
+
+pub mod signals;

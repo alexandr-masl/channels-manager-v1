@@ -1553,6 +1553,18 @@ async fn binary_logs_raw_telegram_signal_and_acknowledges() {
     assert!(line.contains("ADA/USDT"));
     assert!(line.contains("0.2570"));
     assert!(line.contains("-1001596367704"));
+    let parsed = timeout(Duration::from_secs(3), lines.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(parsed.starts_with("Signal parsed:"));
+    let result: serde_json::Value =
+        serde_json::from_str(parsed.split_once("result=").unwrap().1).unwrap();
+    assert_eq!(result["symbol"], "ADAUSDT");
+    assert_eq!(result["buy_targets"], json!(["0.2570"]));
+    assert_eq!(result["sell_targets"], json!(["0.26", "0.27", "0.28"]));
+    assert_eq!(result["stop_loss"], "0.18");
+    assert_eq!(result["leverage"], "3x");
     for (body, expected) in [
         (br#"{"text":"private-payload-without-envelope"}"#.to_vec(), "Telegram intake rejected: InvalidEnvelope"),
         (serde_json::to_vec(&json!({"message_id":8,"date":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),"chat":{"id":-1001596367704i64,"type":"channel"}})).unwrap(), "Telegram intake skipped: NoText"),

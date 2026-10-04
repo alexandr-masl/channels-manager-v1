@@ -97,7 +97,7 @@ The executable uses `Infrastructure::for_telegram_intake` to select
 The general constructor retains the BingX client-job default. Intake decodes and
 validates the envelope and source time, logs known fields, then acknowledges.
 Rejected messages log a sanitized reason; non-text posts, replies, and other chat
-types are skipped. Signal parsing and authorization follow in later slices.
+types are skipped. Base signal parsing logs typed results; authorization follows in a later slice.
 See the README for the example sender. `cargo run -- --check-config` validates
 configuration without opening connections. Coordinated queue ownership is still
 required when the eventual Rust worker takes over from TypeScript.

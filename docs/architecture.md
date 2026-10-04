@@ -4,9 +4,9 @@
 
 Keep this document current as implementation decisions change. The TypeScript
 `satoshi-channel-updates-manager` remains the behavioral source of truth.
-Implemented through issue #2 slice 1: typed Telegram intake validates structure
-and source time, logs accepted text or a skip/rejection reason, and acknowledges.
-Signal parsing, channel authorization and job fan-out remain planned.
+Implemented through issue #2 slice 2: typed Telegram intake validates structure
+and source time, parses base USDT Futures signals, logs results or skip/rejection
+reasons, and acknowledges. Channel authorization and job fan-out remain planned.
 The workflows below extend the initial client-job migration to include signal intake.
 
 ## Workflows
@@ -113,5 +113,60 @@ and chat IDs nonzero. Allow additional Telegram fields. Accept source timestamps
 up to 10 minutes old or 2 minutes ahead, inclusive, using existing contract limits.
 Skip non-channel messages, replies and absent/blank text. Reject malformed
 payloads or invalid timestamps without logging their contents. Accepted text is
-escaped for terminal output. This stage logs and acknowledges; it does not claim
-channel authorization or signal validity.
+escaped for terminal output. Envelope validation does not imply channel authorization. The parser validates
+the supported signal format before logging its result; database checks follow.
+
+
+## Signal parsing (slice 2)
+
+`signals::parse_signal` is pure and returns `Parsed`, `NotSignal`, or `Rejected`.
+The base format uses separate lines: symbol/direction header, `ENTRY [ZONE]`
+(or `BUY [ZONE]`) prices, `TG`/`TP` numbered price targets, `LEVERAGE`, and
+`SL [Hard at]` or `STOP LOSS`. Labels are case-insensitive; leading emoji,
+and `#ADA/USDT`/`ADAUSDT` are supported. Descriptive text in the symbol/direction
+header (such as `DAY`, `SWING`, or other style labels) is ignored; it has no
+effect on the trade. Symbols and directions still require validation.
+`BREAKOUT` is a semantic header keyword, matched case-insensitively: it emits
+`breakOutEntry: true` in parsed JSON, omitted for ordinary signals. It keeps
+the same side and price validation. In TypeScript, `def_buy_targets` in
+`src/targets/targetsMethods.ts` uses this flag to select `STOP_LOSS_LIMIT`
+instead of `LIMIT`; Rust target construction will consume it in the later
+trade workflow. Parsing and logging do not place orders.
+
+Require one symbol and direction, entries, at least one target, stop and leverage.
+Numbers must be finite positive plain decimals. LONG targets rise above all
+entries with stop below; SHORT targets fall below all entries with stop above.
+Numbered targets must start at 1 and be consecutive. Duplicate scalar fields,
+ambiguous headers, unknown instructions and percentage profit targets are rejected.
+Entry ranges (`71-72`, including spaced and Unicode dashes) become two entry
+targets, preserving their order. Optional `POSITION SIZE 0.5%` becomes
+`position: 0.005`, matching the original balance-fraction contract; omitted
+position size stays absent. Missing required values are never inferred.
+Decimal strings and leverage notation retain TypeScript wire compatibility.
+
+`TelegramHandler` logs `Signal parsed: ... result=<JSON>` or a concise
+`Signal skipped`/`Signal rejected` reason before acknowledgement. No database
+eligibility checks, fan-out or trading actions run in this slice.
+
+### Compatibility trace (2026-10-04)
+
+Source: TypeScript `src/handlers/trading-signal-reader.ts`, its
+`test/trading-signal-reader.test.js`, and `src/trade-processing/position-size.ts`.
+The SOL `71-72` / `POSITION SIZE 0.5%` regression matches the original parser's
+JSON output. The original sizing resolver gives signal `position` precedence
+over channel settings; applying that override belongs to the settings slice.
+
+Remaining differences to migrate explicitly:
+
+- Percentage profit targets use `{type: "percent", value, raw}` in TypeScript;
+  Rust currently supports absolute price targets only.
+- TypeScript accepts additional aliases (`OPEN`, `TAKE PROFIT`, `EXIT`,
+  `STOPLOSS`, `S/L`, etc.) and inline text.
+- TypeScript parses signals without a stop and classifies signals without
+  leverage as Spot. Rust currently requires a complete Futures signal.
+- Rust enforces target numbering, price ordering, and unambiguous fields more
+  strictly. Do not copy TypeScript's permissive punctuation stripping or its
+  accidental filtering of entry prices 1–9.
+
+The parser is a supported subset, not full TypeScript parity. Regression tests
+must include source-app examples as well as generated Rust-format cases.

@@ -87,9 +87,9 @@ cargo run --example send_telegram_signal -- -1001596367704
 The sender uses `.env.local`, your ADA signal text, a fresh message ID/date, and
 channel ID `-1001596367704`. It publishes to the original bot queue
 `tg_bot_channel_update` on a local broker with confirms and a 60-second TTL.
-The app validates the envelope and source time, prints the message text and IDs,
-and acknowledges it. Invalid messages get a rejection reason; non-text posts and
-replies are skipped. Signal parsing and trades are not implemented yet.
+The app validates the envelope/source time and logs `Signal parsed: ... result={...}`
+for the base USDT Futures format. Other messages log a skip/rejection reason.
+Messages are acknowledged; client selection and trade execution are not implemented yet.
 `CLIENT_TRADE_WORKER_QUEUES` describes the later BingX client-job boundary and is
 not the queue selected by `Infrastructure::for_telegram_intake`.
 
