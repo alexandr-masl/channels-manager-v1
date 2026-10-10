@@ -1,0 +1,2475 @@
+[
+  {
+    "name": "ada_long",
+    "job": {
+      "jobType": "create_trade",
+      "version": 1,
+      "channelID": -100,
+      "messageId": 7,
+      "tradeExpiresAt": 4102444800000,
+      "signalData": {
+        "symbol": "ADAUSDT",
+        "exchange_client": "_futures",
+        "is_long": true,
+        "leverage": "3x",
+        "buy_targets": [
+          "0.2570"
+        ],
+        "sell_targets": [
+          "0.26",
+          "0.27",
+          "0.28"
+        ],
+        "stop_loss": "0.18"
+      },
+      "channelSettings": {
+        "default_quantity": 0.1,
+        "default_buy_targets": [
+          {
+            "fraction": 1
+          }
+        ],
+        "default_sell_targets": [
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.34
+          }
+        ],
+        "strategy": "basic",
+        "id": -100,
+        "name": "Fixture channel",
+        "xPro": null
+      },
+      "client": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      },
+      "marketData": {
+        "bingXFutures": {
+          "currPrice": "0.2570",
+          "symbolInfo": {
+            "symbol": "ADA-USDT",
+            "status": 1,
+            "tickSize": "0.0001",
+            "lotSize": "0.1",
+            "minQty": "0.1",
+            "minNotional": 5
+          }
+        }
+      },
+      "openedTrades": [],
+      "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:ADAUSDT",
+      "partitionKey": "client-symbol:account-1:futures:ADAUSDT",
+      "provider": "BingX",
+      "market": "futures",
+      "symbol": "ADAUSDT"
+    },
+    "balance": 100,
+    "route": "HEDGE_V1",
+    "expected": {
+      "expires_at": 4102444800000,
+      "trade_object": {
+        "id": "78f86d21a659eb9c8212b8b224efa062",
+        "exch_client": "_binance_futures_",
+        "is_long": true,
+        "state": "NEW",
+        "quantity": 116.7,
+        "symbol": "ADA-USDT",
+        "chat_id": 42,
+        "strategy": {
+          "name": "basic",
+          "is_pro": false,
+          "x_pro": 0,
+          "pro_sl_price": 0
+        },
+        "used_coins": {
+          "wished_quantity": 116.7
+        },
+        "precisions": {
+          "symbol": "ADA-USDT",
+          "priceRangeUp": 5,
+          "priceRangeDown": 0.5,
+          "tickSize": "0.0001",
+          "minQty": 19.455252918287936,
+          "maxQty": 389105.05836575874,
+          "minNotional": 5,
+          "lotSize": "0.1"
+        },
+        "buy_targets": [
+          {
+            "price": "0.2570",
+            "quantity": 116.7,
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "BT",
+            "side": "BUY",
+            "type": "LIMIT",
+            "fraction": 1
+          }
+        ],
+        "positionSizing": {
+          "mode": "dynamic",
+          "source": "channel",
+          "balanceFraction": 0.1,
+          "requestedQuoteAmount": 10,
+          "effectiveQuoteAmount": 10,
+          "balanceFallbackApplied": false,
+          "fallbackUsageRatio": null,
+          "marginQuoteAmount": 10,
+          "notionalQuoteAmount": 30,
+          "rawTradeQuantity": 116.73151750972762,
+          "executableTradeQuantity": 116.7,
+          "executableNotionalQuoteAmount": 29.9919,
+          "display": "10%"
+        },
+        "sell_targets": [
+          {
+            "price": "0.2600",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.33
+          },
+          {
+            "price": "0.2700",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.33
+          },
+          {
+            "price": "0.2800",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.34
+          }
+        ],
+        "stop_loss": {
+          "price": "0.1800",
+          "symbol": "ADA-USDT",
+          "opened": true,
+          "status": "new",
+          "role": "SL",
+          "side": "SELL",
+          "type": "STOP_LOSS_LIMIT"
+        },
+        "auto_Trade": {
+          "channel_id": -100,
+          "channelName": "Fixture channel",
+          "message_id": 7,
+          "usingChannelConfig": true,
+          "exchangeClientName": "Fixture account"
+        },
+        "tradeLeverage": "3x",
+        "futuresMarginMode": "isolated",
+        "positionConfiguration": {
+          "accountingModel": "ORDER_LEDGER_V1"
+        },
+        "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:ADAUSDT",
+        "routing": {
+          "jobType": "create_trade",
+          "provider": "BingX",
+          "market": "futures",
+          "symbol": "ADAUSDT",
+          "partitionKey": "client-symbol:account-1:futures:ADAUSDT"
+        }
+      },
+      "client_data": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      }
+    }
+  },
+  {
+    "name": "ada_short",
+    "job": {
+      "jobType": "create_trade",
+      "version": 1,
+      "channelID": -100,
+      "messageId": 7,
+      "tradeExpiresAt": 4102444800000,
+      "signalData": {
+        "symbol": "ADAUSDT",
+        "exchange_client": "_futures",
+        "is_long": false,
+        "leverage": "3x",
+        "buy_targets": [
+          "0.2570"
+        ],
+        "sell_targets": [
+          "0.25",
+          "0.24",
+          "0.23"
+        ],
+        "stop_loss": "0.28"
+      },
+      "channelSettings": {
+        "default_quantity": 0.1,
+        "default_buy_targets": [
+          {
+            "fraction": 1
+          }
+        ],
+        "default_sell_targets": [
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.34
+          }
+        ],
+        "strategy": "basic",
+        "id": -100,
+        "name": "Fixture channel",
+        "xPro": null
+      },
+      "client": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      },
+      "marketData": {
+        "bingXFutures": {
+          "currPrice": "0.2570",
+          "symbolInfo": {
+            "symbol": "ADA-USDT",
+            "status": 1,
+            "tickSize": "0.0001",
+            "lotSize": "0.1",
+            "minQty": "0.1",
+            "minNotional": 5
+          }
+        }
+      },
+      "openedTrades": [],
+      "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:ADAUSDT",
+      "partitionKey": "client-symbol:account-1:futures:ADAUSDT",
+      "provider": "BingX",
+      "market": "futures",
+      "symbol": "ADAUSDT"
+    },
+    "balance": 100,
+    "route": "ONEWAY_LEGACY",
+    "expected": {
+      "expires_at": 4102444800000,
+      "trade_object": {
+        "id": "78f86d21a659eb9c8212b8b224efa062",
+        "exch_client": "_binance_futures_",
+        "is_long": false,
+        "state": "NEW",
+        "quantity": 116.7,
+        "symbol": "ADA-USDT",
+        "chat_id": 42,
+        "strategy": {
+          "name": "basic",
+          "is_pro": false,
+          "x_pro": 0,
+          "pro_sl_price": 0
+        },
+        "used_coins": {
+          "wished_quantity": 116.7
+        },
+        "precisions": {
+          "symbol": "ADA-USDT",
+          "priceRangeUp": 5,
+          "priceRangeDown": 0.5,
+          "tickSize": "0.0001",
+          "minQty": 19.455252918287936,
+          "maxQty": 389105.05836575874,
+          "minNotional": 5,
+          "lotSize": "0.1"
+        },
+        "buy_targets": [
+          {
+            "price": "0.2570",
+            "quantity": 116.7,
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "BT",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 1
+          }
+        ],
+        "positionSizing": {
+          "mode": "dynamic",
+          "source": "channel",
+          "balanceFraction": 0.1,
+          "requestedQuoteAmount": 10,
+          "effectiveQuoteAmount": 10,
+          "balanceFallbackApplied": false,
+          "fallbackUsageRatio": null,
+          "marginQuoteAmount": 10,
+          "notionalQuoteAmount": 30,
+          "rawTradeQuantity": 116.73151750972762,
+          "executableTradeQuantity": 116.7,
+          "executableNotionalQuoteAmount": 29.9919,
+          "display": "10%"
+        },
+        "sell_targets": [
+          {
+            "price": "0.2500",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "BUY",
+            "type": "LIMIT",
+            "fraction": 0.33
+          },
+          {
+            "price": "0.2400",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "BUY",
+            "type": "LIMIT",
+            "fraction": 0.33
+          },
+          {
+            "price": "0.2300",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "BUY",
+            "type": "LIMIT",
+            "fraction": 0.34
+          }
+        ],
+        "stop_loss": {
+          "price": "0.2800",
+          "symbol": "ADA-USDT",
+          "opened": true,
+          "status": "new",
+          "role": "SL",
+          "side": "BUY",
+          "type": "STOP_LOSS_LIMIT"
+        },
+        "auto_Trade": {
+          "channel_id": -100,
+          "channelName": "Fixture channel",
+          "message_id": 7,
+          "usingChannelConfig": true,
+          "exchangeClientName": "Fixture account"
+        },
+        "tradeLeverage": "3x",
+        "futuresMarginMode": "isolated",
+        "positionConfiguration": {
+          "accountingModel": "ONE_WAY_V1"
+        },
+        "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:ADAUSDT",
+        "routing": {
+          "jobType": "create_trade",
+          "provider": "BingX",
+          "market": "futures",
+          "symbol": "ADAUSDT",
+          "partitionKey": "client-symbol:account-1:futures:ADAUSDT"
+        }
+      },
+      "client_data": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      }
+    }
+  },
+  {
+    "name": "breakout_range",
+    "job": {
+      "jobType": "create_trade",
+      "version": 1,
+      "channelID": -100,
+      "messageId": 7,
+      "tradeExpiresAt": 4102444800000,
+      "signalData": {
+        "symbol": "ADAUSDT",
+        "exchange_client": "_futures",
+        "is_long": true,
+        "leverage": "3x",
+        "buy_targets": [
+          "0.25",
+          "0.26"
+        ],
+        "sell_targets": [
+          "0.28",
+          "0.29",
+          "0.30"
+        ],
+        "stop_loss": "0.18",
+        "breakOutEntry": true
+      },
+      "channelSettings": {
+        "default_quantity": 0.1,
+        "default_buy_targets": [
+          {
+            "fraction": 0.3
+          },
+          {
+            "fraction": 0.3
+          },
+          {
+            "fraction": 0.4
+          }
+        ],
+        "default_sell_targets": [
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.34
+          }
+        ],
+        "strategy": "basic",
+        "id": -100,
+        "name": "Fixture channel",
+        "xPro": null
+      },
+      "client": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      },
+      "marketData": {
+        "bingXFutures": {
+          "currPrice": "0.2570",
+          "symbolInfo": {
+            "symbol": "ADA-USDT",
+            "status": 1,
+            "tickSize": "0.0001",
+            "lotSize": "0.1",
+            "minQty": "0.1",
+            "minNotional": 5
+          }
+        }
+      },
+      "openedTrades": [],
+      "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:ADAUSDT",
+      "partitionKey": "client-symbol:account-1:futures:ADAUSDT",
+      "provider": "BingX",
+      "market": "futures",
+      "symbol": "ADAUSDT"
+    },
+    "balance": 500,
+    "route": "HEDGE_V1",
+    "expected": {
+      "expires_at": 4102444800000,
+      "trade_object": {
+        "id": "78f86d21a659eb9c8212b8b224efa062",
+        "exch_client": "_binance_futures_",
+        "is_long": true,
+        "state": "NEW",
+        "quantity": 583.4,
+        "symbol": "ADA-USDT",
+        "chat_id": 42,
+        "strategy": {
+          "name": "basic",
+          "is_pro": false,
+          "x_pro": 0,
+          "pro_sl_price": 0
+        },
+        "used_coins": {
+          "wished_quantity": 583.4
+        },
+        "precisions": {
+          "symbol": "ADA-USDT",
+          "priceRangeUp": 5,
+          "priceRangeDown": 0.5,
+          "tickSize": "0.0001",
+          "minQty": 19.455252918287936,
+          "maxQty": 389105.05836575874,
+          "minNotional": 5,
+          "lotSize": "0.1"
+        },
+        "buy_targets": [
+          {
+            "price": "0.2500",
+            "quantity": 175,
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "BT",
+            "side": "BUY",
+            "type": "STOP_LOSS_LIMIT",
+            "fraction": 0.3
+          },
+          {
+            "price": "0.2550",
+            "quantity": 233.4,
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "BT",
+            "side": "BUY",
+            "type": "STOP_LOSS_LIMIT",
+            "fraction": 0.4
+          },
+          {
+            "price": "0.2600",
+            "quantity": 175,
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "BT",
+            "side": "BUY",
+            "type": "STOP_LOSS_LIMIT",
+            "fraction": 0.3
+          }
+        ],
+        "positionSizing": {
+          "mode": "dynamic",
+          "source": "channel",
+          "balanceFraction": 0.1,
+          "requestedQuoteAmount": 50,
+          "effectiveQuoteAmount": 50,
+          "balanceFallbackApplied": false,
+          "fallbackUsageRatio": null,
+          "marginQuoteAmount": 50,
+          "notionalQuoteAmount": 150,
+          "rawTradeQuantity": 583.6575875486382,
+          "executableTradeQuantity": 583.4,
+          "executableNotionalQuoteAmount": 148.767,
+          "display": "10%"
+        },
+        "sell_targets": [
+          {
+            "price": "0.2800",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.33
+          },
+          {
+            "price": "0.2900",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.33
+          },
+          {
+            "price": "0.3000",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.34
+          }
+        ],
+        "stop_loss": {
+          "price": "0.1800",
+          "symbol": "ADA-USDT",
+          "opened": true,
+          "status": "new",
+          "role": "SL",
+          "side": "SELL",
+          "type": "STOP_LOSS_LIMIT"
+        },
+        "auto_Trade": {
+          "channel_id": -100,
+          "channelName": "Fixture channel",
+          "message_id": 7,
+          "usingChannelConfig": true,
+          "exchangeClientName": "Fixture account"
+        },
+        "tradeLeverage": "3x",
+        "futuresMarginMode": "isolated",
+        "positionConfiguration": {
+          "accountingModel": "ORDER_LEDGER_V1"
+        },
+        "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:ADAUSDT",
+        "routing": {
+          "jobType": "create_trade",
+          "provider": "BingX",
+          "market": "futures",
+          "symbol": "ADAUSDT",
+          "partitionKey": "client-symbol:account-1:futures:ADAUSDT"
+        }
+      },
+      "client_data": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      }
+    }
+  },
+  {
+    "name": "static_fallback",
+    "job": {
+      "jobType": "create_trade",
+      "version": 1,
+      "channelID": -100,
+      "messageId": 7,
+      "tradeExpiresAt": 4102444800000,
+      "signalData": {
+        "symbol": "ADAUSDT",
+        "exchange_client": "_futures",
+        "is_long": true,
+        "leverage": "3x",
+        "buy_targets": [
+          "0.2570"
+        ],
+        "sell_targets": [
+          "0.26",
+          "0.27",
+          "0.28"
+        ],
+        "stop_loss": "0.18"
+      },
+      "channelSettings": {
+        "default_quantity": 0.1,
+        "default_buy_targets": [
+          {
+            "fraction": 1
+          }
+        ],
+        "default_sell_targets": [
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.34
+          }
+        ],
+        "strategy": "basic",
+        "id": -100,
+        "name": "Fixture channel",
+        "xPro": null,
+        "position_size_mode": "static",
+        "static_quote_amount": 100
+      },
+      "client": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      },
+      "marketData": {
+        "bingXFutures": {
+          "currPrice": "0.2570",
+          "symbolInfo": {
+            "symbol": "ADA-USDT",
+            "status": 1,
+            "tickSize": "0.0001",
+            "lotSize": "0.1",
+            "minQty": "0.1",
+            "minNotional": 5
+          }
+        }
+      },
+      "openedTrades": [],
+      "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:ADAUSDT",
+      "partitionKey": "client-symbol:account-1:futures:ADAUSDT",
+      "provider": "BingX",
+      "market": "futures",
+      "symbol": "ADAUSDT"
+    },
+    "balance": 20,
+    "route": "HEDGE_V1",
+    "expected": {
+      "expires_at": 4102444800000,
+      "trade_object": {
+        "id": "78f86d21a659eb9c8212b8b224efa062",
+        "exch_client": "_binance_futures_",
+        "is_long": true,
+        "state": "NEW",
+        "quantity": 221.7,
+        "symbol": "ADA-USDT",
+        "chat_id": 42,
+        "strategy": {
+          "name": "basic",
+          "is_pro": false,
+          "x_pro": 0,
+          "pro_sl_price": 0
+        },
+        "used_coins": {
+          "wished_quantity": 221.7
+        },
+        "precisions": {
+          "symbol": "ADA-USDT",
+          "priceRangeUp": 5,
+          "priceRangeDown": 0.5,
+          "tickSize": "0.0001",
+          "minQty": 19.455252918287936,
+          "maxQty": 389105.05836575874,
+          "minNotional": 5,
+          "lotSize": "0.1"
+        },
+        "buy_targets": [
+          {
+            "price": "0.2570",
+            "quantity": 221.7,
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "BT",
+            "side": "BUY",
+            "type": "LIMIT",
+            "fraction": 1
+          }
+        ],
+        "positionSizing": {
+          "mode": "static",
+          "source": "channel",
+          "requestedQuoteAmount": 100,
+          "effectiveQuoteAmount": 19,
+          "balanceFallbackApplied": true,
+          "fallbackUsageRatio": 0.95,
+          "marginQuoteAmount": 19,
+          "notionalQuoteAmount": 57,
+          "rawTradeQuantity": 221.7898832684825,
+          "executableTradeQuantity": 221.7,
+          "executableNotionalQuoteAmount": 56.9769,
+          "display": "19 USDT effective (Static request: 100 USDT)"
+        },
+        "sell_targets": [
+          {
+            "price": "0.2600",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.33
+          },
+          {
+            "price": "0.2700",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.33
+          },
+          {
+            "price": "0.2800",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.34
+          }
+        ],
+        "stop_loss": {
+          "price": "0.1800",
+          "symbol": "ADA-USDT",
+          "opened": true,
+          "status": "new",
+          "role": "SL",
+          "side": "SELL",
+          "type": "STOP_LOSS_LIMIT"
+        },
+        "auto_Trade": {
+          "channel_id": -100,
+          "channelName": "Fixture channel",
+          "message_id": 7,
+          "usingChannelConfig": true,
+          "exchangeClientName": "Fixture account"
+        },
+        "tradeLeverage": "3x",
+        "futuresMarginMode": "isolated",
+        "positionConfiguration": {
+          "accountingModel": "ORDER_LEDGER_V1"
+        },
+        "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:ADAUSDT",
+        "routing": {
+          "jobType": "create_trade",
+          "provider": "BingX",
+          "market": "futures",
+          "symbol": "ADAUSDT",
+          "partitionKey": "client-symbol:account-1:futures:ADAUSDT"
+        }
+      },
+      "client_data": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      }
+    }
+  },
+  {
+    "name": "signal_override",
+    "job": {
+      "jobType": "create_trade",
+      "version": 1,
+      "channelID": -100,
+      "messageId": 7,
+      "tradeExpiresAt": 4102444800000,
+      "signalData": {
+        "symbol": "ADAUSDT",
+        "exchange_client": "_futures",
+        "is_long": true,
+        "leverage": "3x",
+        "buy_targets": [
+          "0.2570"
+        ],
+        "sell_targets": [
+          "0.26",
+          "0.27",
+          "0.28"
+        ],
+        "stop_loss": "0.18",
+        "position": 0.02
+      },
+      "channelSettings": {
+        "default_quantity": 0.1,
+        "default_buy_targets": [
+          {
+            "fraction": 1
+          }
+        ],
+        "default_sell_targets": [
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.34
+          }
+        ],
+        "strategy": "basic",
+        "id": -100,
+        "name": "Fixture channel",
+        "xPro": null
+      },
+      "client": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      },
+      "marketData": {
+        "bingXFutures": {
+          "currPrice": "0.2570",
+          "symbolInfo": {
+            "symbol": "ADA-USDT",
+            "status": 1,
+            "tickSize": "0.0001",
+            "lotSize": "0.1",
+            "minQty": "0.1",
+            "minNotional": 5
+          }
+        }
+      },
+      "openedTrades": [],
+      "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:ADAUSDT",
+      "partitionKey": "client-symbol:account-1:futures:ADAUSDT",
+      "provider": "BingX",
+      "market": "futures",
+      "symbol": "ADAUSDT"
+    },
+    "balance": 1000,
+    "route": "HEDGE_V1",
+    "expected": {
+      "expires_at": 4102444800000,
+      "trade_object": {
+        "id": "78f86d21a659eb9c8212b8b224efa062",
+        "exch_client": "_binance_futures_",
+        "is_long": true,
+        "state": "NEW",
+        "quantity": 233.4,
+        "symbol": "ADA-USDT",
+        "chat_id": 42,
+        "strategy": {
+          "name": "basic",
+          "is_pro": false,
+          "x_pro": 0,
+          "pro_sl_price": 0
+        },
+        "used_coins": {
+          "wished_quantity": 233.4
+        },
+        "precisions": {
+          "symbol": "ADA-USDT",
+          "priceRangeUp": 5,
+          "priceRangeDown": 0.5,
+          "tickSize": "0.0001",
+          "minQty": 19.455252918287936,
+          "maxQty": 389105.05836575874,
+          "minNotional": 5,
+          "lotSize": "0.1"
+        },
+        "buy_targets": [
+          {
+            "price": "0.2570",
+            "quantity": 233.4,
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "BT",
+            "side": "BUY",
+            "type": "LIMIT",
+            "fraction": 1
+          }
+        ],
+        "positionSizing": {
+          "mode": "dynamic",
+          "source": "signal",
+          "balanceFraction": 0.02,
+          "requestedQuoteAmount": 20,
+          "effectiveQuoteAmount": 20,
+          "balanceFallbackApplied": false,
+          "fallbackUsageRatio": null,
+          "marginQuoteAmount": 20,
+          "notionalQuoteAmount": 60,
+          "rawTradeQuantity": 233.46303501945525,
+          "executableTradeQuantity": 233.4,
+          "executableNotionalQuoteAmount": 59.9838,
+          "display": "2% signal override"
+        },
+        "sell_targets": [
+          {
+            "price": "0.2600",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.33
+          },
+          {
+            "price": "0.2700",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.33
+          },
+          {
+            "price": "0.2800",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.34
+          }
+        ],
+        "stop_loss": {
+          "price": "0.1800",
+          "symbol": "ADA-USDT",
+          "opened": true,
+          "status": "new",
+          "role": "SL",
+          "side": "SELL",
+          "type": "STOP_LOSS_LIMIT"
+        },
+        "auto_Trade": {
+          "channel_id": -100,
+          "channelName": "Fixture channel",
+          "message_id": 7,
+          "usingChannelConfig": true,
+          "exchangeClientName": "Fixture account"
+        },
+        "tradeLeverage": "3x",
+        "futuresMarginMode": "isolated",
+        "positionConfiguration": {
+          "accountingModel": "ORDER_LEDGER_V1"
+        },
+        "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:ADAUSDT",
+        "routing": {
+          "jobType": "create_trade",
+          "provider": "BingX",
+          "market": "futures",
+          "symbol": "ADAUSDT",
+          "partitionKey": "client-symbol:account-1:futures:ADAUSDT"
+        }
+      },
+      "client_data": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      }
+    }
+  },
+  {
+    "name": "reduced_targets",
+    "job": {
+      "jobType": "create_trade",
+      "version": 1,
+      "channelID": -100,
+      "messageId": 7,
+      "tradeExpiresAt": 4102444800000,
+      "signalData": {
+        "symbol": "ADAUSDT",
+        "exchange_client": "_futures",
+        "is_long": true,
+        "leverage": "3x",
+        "buy_targets": [
+          "0.2570"
+        ],
+        "sell_targets": [
+          "0.26",
+          "0.27",
+          "0.28"
+        ],
+        "stop_loss": "0.18"
+      },
+      "channelSettings": {
+        "default_quantity": 0.1,
+        "default_buy_targets": [
+          {
+            "fraction": 1
+          }
+        ],
+        "default_sell_targets": [
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.34
+          }
+        ],
+        "strategy": "basic",
+        "id": -100,
+        "name": "Fixture channel",
+        "xPro": null
+      },
+      "client": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      },
+      "marketData": {
+        "bingXFutures": {
+          "currPrice": "0.2570",
+          "symbolInfo": {
+            "symbol": "ADA-USDT",
+            "status": 1,
+            "tickSize": "0.0001",
+            "lotSize": "0.1",
+            "minQty": "0.1",
+            "minNotional": 5
+          }
+        }
+      },
+      "openedTrades": [],
+      "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:ADAUSDT",
+      "partitionKey": "client-symbol:account-1:futures:ADAUSDT",
+      "provider": "BingX",
+      "market": "futures",
+      "symbol": "ADAUSDT"
+    },
+    "balance": 55,
+    "route": "HEDGE_V1",
+    "expected": {
+      "expires_at": 4102444800000,
+      "trade_object": {
+        "id": "78f86d21a659eb9c8212b8b224efa062",
+        "exch_client": "_binance_futures_",
+        "is_long": true,
+        "state": "NEW",
+        "quantity": 64.2,
+        "symbol": "ADA-USDT",
+        "chat_id": 42,
+        "strategy": {
+          "name": "basic",
+          "is_pro": false,
+          "x_pro": 0,
+          "pro_sl_price": 0
+        },
+        "used_coins": {
+          "wished_quantity": 64.2
+        },
+        "precisions": {
+          "symbol": "ADA-USDT",
+          "priceRangeUp": 5,
+          "priceRangeDown": 0.5,
+          "tickSize": "0.0001",
+          "minQty": 19.455252918287936,
+          "maxQty": 389105.05836575874,
+          "minNotional": 5,
+          "lotSize": "0.1"
+        },
+        "buy_targets": [
+          {
+            "price": "0.2570",
+            "quantity": 64.2,
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "BT",
+            "side": "BUY",
+            "type": "LIMIT",
+            "fraction": 1
+          }
+        ],
+        "positionSizing": {
+          "mode": "dynamic",
+          "source": "channel",
+          "balanceFraction": 0.1,
+          "requestedQuoteAmount": 5.5,
+          "effectiveQuoteAmount": 5.5,
+          "balanceFallbackApplied": false,
+          "fallbackUsageRatio": null,
+          "marginQuoteAmount": 5.5,
+          "notionalQuoteAmount": 16.5,
+          "rawTradeQuantity": 64.2023346303502,
+          "executableTradeQuantity": 64.2,
+          "executableNotionalQuoteAmount": 16.4994,
+          "display": "10%"
+        },
+        "sell_targets": [
+          {
+            "price": "0.2600",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.33
+          },
+          {
+            "price": "0.2700",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.33
+          },
+          {
+            "price": "0.2800",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.34
+          }
+        ],
+        "stop_loss": {
+          "price": "0.1800",
+          "symbol": "ADA-USDT",
+          "opened": true,
+          "status": "new",
+          "role": "SL",
+          "side": "SELL",
+          "type": "STOP_LOSS_LIMIT"
+        },
+        "auto_Trade": {
+          "channel_id": -100,
+          "channelName": "Fixture channel",
+          "message_id": 7,
+          "usingChannelConfig": true,
+          "exchangeClientName": "Fixture account"
+        },
+        "tradeLeverage": "3x",
+        "futuresMarginMode": "isolated",
+        "positionConfiguration": {
+          "accountingModel": "ORDER_LEDGER_V1"
+        },
+        "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:ADAUSDT",
+        "routing": {
+          "jobType": "create_trade",
+          "provider": "BingX",
+          "market": "futures",
+          "symbol": "ADAUSDT",
+          "partitionKey": "client-symbol:account-1:futures:ADAUSDT"
+        }
+      },
+      "client_data": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      }
+    }
+  },
+  {
+    "name": "integer_shorthand",
+    "job": {
+      "jobType": "create_trade",
+      "version": 1,
+      "channelID": -100,
+      "messageId": 7,
+      "tradeExpiresAt": 4102444800000,
+      "signalData": {
+        "symbol": "ADAUSDT",
+        "exchange_client": "_futures",
+        "is_long": true,
+        "leverage": "3x",
+        "buy_targets": [
+          "2570"
+        ],
+        "sell_targets": [
+          "2600",
+          "2700",
+          "2800"
+        ],
+        "stop_loss": "1800"
+      },
+      "channelSettings": {
+        "default_quantity": 0.1,
+        "default_buy_targets": [
+          {
+            "fraction": 1
+          }
+        ],
+        "default_sell_targets": [
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.34
+          }
+        ],
+        "strategy": "basic",
+        "id": -100,
+        "name": "Fixture channel",
+        "xPro": null
+      },
+      "client": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      },
+      "marketData": {
+        "bingXFutures": {
+          "currPrice": "0.2570",
+          "symbolInfo": {
+            "symbol": "ADA-USDT",
+            "status": 1,
+            "tickSize": "0.0001",
+            "lotSize": "0.1",
+            "minQty": "0.1",
+            "minNotional": 5
+          }
+        }
+      },
+      "openedTrades": [],
+      "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:ADAUSDT",
+      "partitionKey": "client-symbol:account-1:futures:ADAUSDT",
+      "provider": "BingX",
+      "market": "futures",
+      "symbol": "ADAUSDT"
+    },
+    "balance": 100,
+    "route": "HEDGE_V1",
+    "expected": {
+      "expires_at": 4102444800000,
+      "trade_object": {
+        "id": "78f86d21a659eb9c8212b8b224efa062",
+        "exch_client": "_binance_futures_",
+        "is_long": true,
+        "state": "NEW",
+        "quantity": 116.7,
+        "symbol": "ADA-USDT",
+        "chat_id": 42,
+        "strategy": {
+          "name": "basic",
+          "is_pro": false,
+          "x_pro": 0,
+          "pro_sl_price": 0
+        },
+        "used_coins": {
+          "wished_quantity": 116.7
+        },
+        "precisions": {
+          "symbol": "ADA-USDT",
+          "priceRangeUp": 5,
+          "priceRangeDown": 0.5,
+          "tickSize": "0.0001",
+          "minQty": 19.455252918287936,
+          "maxQty": 389105.05836575874,
+          "minNotional": 5,
+          "lotSize": "0.1"
+        },
+        "buy_targets": [
+          {
+            "price": "0.2570",
+            "quantity": 116.7,
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "BT",
+            "side": "BUY",
+            "type": "LIMIT",
+            "fraction": 1
+          }
+        ],
+        "positionSizing": {
+          "mode": "dynamic",
+          "source": "channel",
+          "balanceFraction": 0.1,
+          "requestedQuoteAmount": 10,
+          "effectiveQuoteAmount": 10,
+          "balanceFallbackApplied": false,
+          "fallbackUsageRatio": null,
+          "marginQuoteAmount": 10,
+          "notionalQuoteAmount": 30,
+          "rawTradeQuantity": 116.73151750972762,
+          "executableTradeQuantity": 116.7,
+          "executableNotionalQuoteAmount": 29.9919,
+          "display": "10%"
+        },
+        "sell_targets": [
+          {
+            "price": "0.2600",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.33
+          },
+          {
+            "price": "0.2700",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.33
+          },
+          {
+            "price": "0.2800",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.34
+          }
+        ],
+        "stop_loss": {
+          "price": "0.1800",
+          "symbol": "ADA-USDT",
+          "opened": true,
+          "status": "new",
+          "role": "SL",
+          "side": "SELL",
+          "type": "STOP_LOSS_LIMIT"
+        },
+        "auto_Trade": {
+          "channel_id": -100,
+          "channelName": "Fixture channel",
+          "message_id": 7,
+          "usingChannelConfig": true,
+          "exchangeClientName": "Fixture account"
+        },
+        "tradeLeverage": "3x",
+        "futuresMarginMode": "isolated",
+        "positionConfiguration": {
+          "accountingModel": "ORDER_LEDGER_V1"
+        },
+        "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:ADAUSDT",
+        "routing": {
+          "jobType": "create_trade",
+          "provider": "BingX",
+          "market": "futures",
+          "symbol": "ADAUSDT",
+          "partitionKey": "client-symbol:account-1:futures:ADAUSDT"
+        }
+      },
+      "client_data": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      }
+    }
+  },
+  {
+    "name": "btc_long",
+    "job": {
+      "jobType": "create_trade",
+      "version": 1,
+      "channelID": -100,
+      "messageId": 7,
+      "tradeExpiresAt": 4102444800000,
+      "signalData": {
+        "symbol": "BTCUSDT",
+        "exchange_client": "_futures",
+        "is_long": true,
+        "leverage": "3x",
+        "buy_targets": [
+          "62000"
+        ],
+        "sell_targets": [
+          "63000",
+          "64000",
+          "65000"
+        ],
+        "stop_loss": "61000"
+      },
+      "channelSettings": {
+        "default_quantity": 0.1,
+        "default_buy_targets": [
+          {
+            "fraction": 1
+          }
+        ],
+        "default_sell_targets": [
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.34
+          }
+        ],
+        "strategy": "basic",
+        "id": -100,
+        "name": "Fixture channel",
+        "xPro": null
+      },
+      "client": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      },
+      "marketData": {
+        "bingXFutures": {
+          "currPrice": "62000.00",
+          "symbolInfo": {
+            "symbol": "BTC-USDT",
+            "status": 1,
+            "tickSize": "0.01",
+            "lotSize": "0.001",
+            "minQty": "0.001",
+            "minNotional": 5
+          }
+        }
+      },
+      "openedTrades": [],
+      "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:BTCUSDT",
+      "partitionKey": "client-symbol:account-1:futures:BTCUSDT",
+      "provider": "BingX",
+      "market": "futures",
+      "symbol": "BTCUSDT"
+    },
+    "balance": 1000,
+    "route": "HEDGE_V1",
+    "expected": {
+      "expires_at": 4102444800000,
+      "trade_object": {
+        "id": "b3e6c5f0d6048b687de5e4d462f0fbf1",
+        "exch_client": "_binance_futures_",
+        "is_long": true,
+        "state": "NEW",
+        "quantity": 0.004,
+        "symbol": "BTC-USDT",
+        "chat_id": 42,
+        "strategy": {
+          "name": "basic",
+          "is_pro": false,
+          "x_pro": 0,
+          "pro_sl_price": 0
+        },
+        "used_coins": {
+          "wished_quantity": 0.004
+        },
+        "precisions": {
+          "symbol": "BTC-USDT",
+          "priceRangeUp": 5,
+          "priceRangeDown": 0.5,
+          "tickSize": "0.01",
+          "minQty": 0.001,
+          "maxQty": 1.6129032258064515,
+          "minNotional": 5,
+          "lotSize": "0.001"
+        },
+        "buy_targets": [
+          {
+            "price": "62000.00",
+            "quantity": 0.004,
+            "symbol": "BTC-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "BT",
+            "side": "BUY",
+            "type": "LIMIT",
+            "fraction": 1
+          }
+        ],
+        "positionSizing": {
+          "mode": "dynamic",
+          "source": "channel",
+          "balanceFraction": 0.1,
+          "requestedQuoteAmount": 100,
+          "effectiveQuoteAmount": 100,
+          "balanceFallbackApplied": false,
+          "fallbackUsageRatio": null,
+          "marginQuoteAmount": 100,
+          "notionalQuoteAmount": 300,
+          "rawTradeQuantity": 0.004838709677419355,
+          "executableTradeQuantity": 0.004,
+          "executableNotionalQuoteAmount": 248,
+          "display": "10%"
+        },
+        "sell_targets": [
+          {
+            "price": "63000.00",
+            "symbol": "BTC-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.33
+          },
+          {
+            "price": "64000.00",
+            "symbol": "BTC-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.33
+          },
+          {
+            "price": "65000.00",
+            "symbol": "BTC-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.34
+          }
+        ],
+        "stop_loss": {
+          "price": "61000.00",
+          "symbol": "BTC-USDT",
+          "opened": true,
+          "status": "new",
+          "role": "SL",
+          "side": "SELL",
+          "type": "STOP_LOSS_LIMIT"
+        },
+        "auto_Trade": {
+          "channel_id": -100,
+          "channelName": "Fixture channel",
+          "message_id": 7,
+          "usingChannelConfig": true,
+          "exchangeClientName": "Fixture account"
+        },
+        "tradeLeverage": "3x",
+        "futuresMarginMode": "isolated",
+        "positionConfiguration": {
+          "accountingModel": "ORDER_LEDGER_V1"
+        },
+        "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:BTCUSDT",
+        "routing": {
+          "jobType": "create_trade",
+          "provider": "BingX",
+          "market": "futures",
+          "symbol": "BTCUSDT",
+          "partitionKey": "client-symbol:account-1:futures:BTCUSDT"
+        }
+      },
+      "client_data": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      }
+    }
+  },
+  {
+    "name": "btc_short",
+    "job": {
+      "jobType": "create_trade",
+      "version": 1,
+      "channelID": -100,
+      "messageId": 7,
+      "tradeExpiresAt": 4102444800000,
+      "signalData": {
+        "symbol": "BTCUSDT",
+        "exchange_client": "_futures",
+        "is_long": false,
+        "leverage": "3x",
+        "buy_targets": [
+          "62000"
+        ],
+        "sell_targets": [
+          "61000",
+          "60000",
+          "59000"
+        ],
+        "stop_loss": "63000"
+      },
+      "channelSettings": {
+        "default_quantity": 0.1,
+        "default_buy_targets": [
+          {
+            "fraction": 1
+          }
+        ],
+        "default_sell_targets": [
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.34
+          }
+        ],
+        "strategy": "basic",
+        "id": -100,
+        "name": "Fixture channel",
+        "xPro": null
+      },
+      "client": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      },
+      "marketData": {
+        "bingXFutures": {
+          "currPrice": "62000.00",
+          "symbolInfo": {
+            "symbol": "BTC-USDT",
+            "status": 1,
+            "tickSize": "0.01",
+            "lotSize": "0.001",
+            "minQty": "0.001",
+            "minNotional": 5
+          }
+        }
+      },
+      "openedTrades": [],
+      "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:BTCUSDT",
+      "partitionKey": "client-symbol:account-1:futures:BTCUSDT",
+      "provider": "BingX",
+      "market": "futures",
+      "symbol": "BTCUSDT"
+    },
+    "balance": 1000,
+    "route": "HEDGE_V1",
+    "expected": {
+      "expires_at": 4102444800000,
+      "trade_object": {
+        "id": "b3e6c5f0d6048b687de5e4d462f0fbf1",
+        "exch_client": "_binance_futures_",
+        "is_long": false,
+        "state": "NEW",
+        "quantity": 0.004,
+        "symbol": "BTC-USDT",
+        "chat_id": 42,
+        "strategy": {
+          "name": "basic",
+          "is_pro": false,
+          "x_pro": 0,
+          "pro_sl_price": 0
+        },
+        "used_coins": {
+          "wished_quantity": 0.004
+        },
+        "precisions": {
+          "symbol": "BTC-USDT",
+          "priceRangeUp": 5,
+          "priceRangeDown": 0.5,
+          "tickSize": "0.01",
+          "minQty": 0.001,
+          "maxQty": 1.6129032258064515,
+          "minNotional": 5,
+          "lotSize": "0.001"
+        },
+        "buy_targets": [
+          {
+            "price": "62000.00",
+            "quantity": 0.004,
+            "symbol": "BTC-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "BT",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 1
+          }
+        ],
+        "positionSizing": {
+          "mode": "dynamic",
+          "source": "channel",
+          "balanceFraction": 0.1,
+          "requestedQuoteAmount": 100,
+          "effectiveQuoteAmount": 100,
+          "balanceFallbackApplied": false,
+          "fallbackUsageRatio": null,
+          "marginQuoteAmount": 100,
+          "notionalQuoteAmount": 300,
+          "rawTradeQuantity": 0.004838709677419355,
+          "executableTradeQuantity": 0.004,
+          "executableNotionalQuoteAmount": 248,
+          "display": "10%"
+        },
+        "sell_targets": [
+          {
+            "price": "61000.00",
+            "symbol": "BTC-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "BUY",
+            "type": "LIMIT",
+            "fraction": 0.33
+          },
+          {
+            "price": "60000.00",
+            "symbol": "BTC-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "BUY",
+            "type": "LIMIT",
+            "fraction": 0.33
+          },
+          {
+            "price": "59000.00",
+            "symbol": "BTC-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "BUY",
+            "type": "LIMIT",
+            "fraction": 0.34
+          }
+        ],
+        "stop_loss": {
+          "price": "63000.00",
+          "symbol": "BTC-USDT",
+          "opened": true,
+          "status": "new",
+          "role": "SL",
+          "side": "BUY",
+          "type": "STOP_LOSS_LIMIT"
+        },
+        "auto_Trade": {
+          "channel_id": -100,
+          "channelName": "Fixture channel",
+          "message_id": 7,
+          "usingChannelConfig": true,
+          "exchangeClientName": "Fixture account"
+        },
+        "tradeLeverage": "3x",
+        "futuresMarginMode": "isolated",
+        "positionConfiguration": {
+          "accountingModel": "ORDER_LEDGER_V1"
+        },
+        "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:BTCUSDT",
+        "routing": {
+          "jobType": "create_trade",
+          "provider": "BingX",
+          "market": "futures",
+          "symbol": "BTCUSDT",
+          "partitionKey": "client-symbol:account-1:futures:BTCUSDT"
+        }
+      },
+      "client_data": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      }
+    }
+  },
+  {
+    "name": "sol_two_entries_string_fractions",
+    "job": {
+      "jobType": "create_trade",
+      "version": 1,
+      "channelID": -100,
+      "messageId": 7,
+      "tradeExpiresAt": 4102444800000,
+      "signalData": {
+        "symbol": "SOLUSDT",
+        "exchange_client": "_futures",
+        "is_long": true,
+        "leverage": "3x",
+        "buy_targets": [
+          "71",
+          "72"
+        ],
+        "sell_targets": [
+          "88",
+          "90",
+          "92",
+          "94"
+        ],
+        "stop_loss": "70"
+      },
+      "channelSettings": {
+        "default_quantity": 0.1,
+        "default_buy_targets": [
+          {
+            "fraction": "0.5"
+          },
+          {
+            "fraction": "0.5"
+          }
+        ],
+        "default_sell_targets": [
+          {
+            "fraction": "0.4"
+          },
+          {
+            "fraction": "0.6"
+          }
+        ],
+        "strategy": "basic",
+        "id": -100,
+        "name": "Fixture channel",
+        "xPro": null
+      },
+      "client": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      },
+      "marketData": {
+        "bingXFutures": {
+          "currPrice": "71.50",
+          "symbolInfo": {
+            "symbol": "SOL-USDT",
+            "status": 1,
+            "tickSize": "0.01",
+            "lotSize": "0.01",
+            "minQty": "0.01",
+            "minNotional": 5
+          }
+        }
+      },
+      "openedTrades": [],
+      "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:SOLUSDT",
+      "partitionKey": "client-symbol:account-1:futures:SOLUSDT",
+      "provider": "BingX",
+      "market": "futures",
+      "symbol": "SOLUSDT"
+    },
+    "balance": 1000,
+    "route": "HEDGE_V1",
+    "expected": {
+      "expires_at": 4102444800000,
+      "trade_object": {
+        "id": "9e42b9370de35630c4d7ab37dbd1be17",
+        "exch_client": "_binance_futures_",
+        "is_long": true,
+        "state": "NEW",
+        "quantity": 4.18,
+        "symbol": "SOL-USDT",
+        "chat_id": 42,
+        "strategy": {
+          "name": "basic",
+          "is_pro": false,
+          "x_pro": 0,
+          "pro_sl_price": 0
+        },
+        "used_coins": {
+          "wished_quantity": 4.18
+        },
+        "precisions": {
+          "symbol": "SOL-USDT",
+          "priceRangeUp": 5,
+          "priceRangeDown": 0.5,
+          "tickSize": "0.01",
+          "minQty": 0.06993006993006994,
+          "maxQty": 1398.6013986013986,
+          "minNotional": 5,
+          "lotSize": "0.01"
+        },
+        "buy_targets": [
+          {
+            "price": "71.00",
+            "quantity": 2.09,
+            "symbol": "SOL-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "BT",
+            "side": "BUY",
+            "type": "LIMIT",
+            "fraction": "0.5"
+          },
+          {
+            "price": "72.00",
+            "quantity": 2.09,
+            "symbol": "SOL-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "BT",
+            "side": "BUY",
+            "type": "LIMIT",
+            "fraction": "0.5"
+          }
+        ],
+        "positionSizing": {
+          "mode": "dynamic",
+          "source": "channel",
+          "balanceFraction": 0.1,
+          "requestedQuoteAmount": 100,
+          "effectiveQuoteAmount": 100,
+          "balanceFallbackApplied": false,
+          "fallbackUsageRatio": null,
+          "marginQuoteAmount": 100,
+          "notionalQuoteAmount": 300,
+          "rawTradeQuantity": 4.195804195804196,
+          "executableTradeQuantity": 4.18,
+          "executableNotionalQuoteAmount": 298.87,
+          "display": "10%"
+        },
+        "sell_targets": [
+          {
+            "price": "88.00",
+            "symbol": "SOL-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": "0.4"
+          },
+          {
+            "price": "90.00",
+            "symbol": "SOL-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": "0.6"
+          }
+        ],
+        "stop_loss": {
+          "price": "70.00",
+          "symbol": "SOL-USDT",
+          "opened": true,
+          "status": "new",
+          "role": "SL",
+          "side": "SELL",
+          "type": "STOP_LOSS_LIMIT"
+        },
+        "auto_Trade": {
+          "channel_id": -100,
+          "channelName": "Fixture channel",
+          "message_id": 7,
+          "usingChannelConfig": true,
+          "exchangeClientName": "Fixture account"
+        },
+        "tradeLeverage": "3x",
+        "futuresMarginMode": "isolated",
+        "positionConfiguration": {
+          "accountingModel": "ORDER_LEDGER_V1"
+        },
+        "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:SOLUSDT",
+        "routing": {
+          "jobType": "create_trade",
+          "provider": "BingX",
+          "market": "futures",
+          "symbol": "SOLUSDT",
+          "partitionKey": "client-symbol:account-1:futures:SOLUSDT"
+        }
+      },
+      "client_data": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      }
+    }
+  },
+  {
+    "name": "string_pro_setting",
+    "job": {
+      "jobType": "create_trade",
+      "version": 1,
+      "channelID": -100,
+      "messageId": 7,
+      "tradeExpiresAt": 4102444800000,
+      "signalData": {
+        "symbol": "ADAUSDT",
+        "exchange_client": "_futures",
+        "is_long": true,
+        "leverage": "3x",
+        "buy_targets": [
+          "0.2570"
+        ],
+        "sell_targets": [
+          "0.26",
+          "0.27",
+          "0.28"
+        ],
+        "stop_loss": "0.18"
+      },
+      "channelSettings": {
+        "default_quantity": 0.1,
+        "default_buy_targets": [
+          {
+            "fraction": 1
+          }
+        ],
+        "default_sell_targets": [
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.34
+          }
+        ],
+        "strategy": "basic",
+        "id": -100,
+        "name": "Fixture channel",
+        "xPro": "0"
+      },
+      "client": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      },
+      "marketData": {
+        "bingXFutures": {
+          "currPrice": "0.2570",
+          "symbolInfo": {
+            "symbol": "ADA-USDT",
+            "status": 1,
+            "tickSize": "0.0001",
+            "lotSize": "0.1",
+            "minQty": "0.1",
+            "minNotional": 5
+          }
+        }
+      },
+      "openedTrades": [],
+      "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:ADAUSDT",
+      "partitionKey": "client-symbol:account-1:futures:ADAUSDT",
+      "provider": "BingX",
+      "market": "futures",
+      "symbol": "ADAUSDT"
+    },
+    "balance": 100,
+    "route": "HEDGE_V1",
+    "expected": {
+      "expires_at": 4102444800000,
+      "trade_object": {
+        "id": "78f86d21a659eb9c8212b8b224efa062",
+        "exch_client": "_binance_futures_",
+        "is_long": true,
+        "state": "NEW",
+        "quantity": 116.7,
+        "symbol": "ADA-USDT",
+        "chat_id": 42,
+        "strategy": {
+          "name": "basic",
+          "is_pro": true,
+          "x_pro": "0",
+          "pro_sl_price": 0
+        },
+        "used_coins": {
+          "wished_quantity": 116.7
+        },
+        "precisions": {
+          "symbol": "ADA-USDT",
+          "priceRangeUp": 5,
+          "priceRangeDown": 0.5,
+          "tickSize": "0.0001",
+          "minQty": 19.455252918287936,
+          "maxQty": 389105.05836575874,
+          "minNotional": 5,
+          "lotSize": "0.1"
+        },
+        "buy_targets": [
+          {
+            "price": "0.2570",
+            "quantity": 116.7,
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "BT",
+            "side": "BUY",
+            "type": "LIMIT",
+            "fraction": 1
+          }
+        ],
+        "positionSizing": {
+          "mode": "dynamic",
+          "source": "channel",
+          "balanceFraction": 0.1,
+          "requestedQuoteAmount": 10,
+          "effectiveQuoteAmount": 10,
+          "balanceFallbackApplied": false,
+          "fallbackUsageRatio": null,
+          "marginQuoteAmount": 10,
+          "notionalQuoteAmount": 30,
+          "rawTradeQuantity": 116.73151750972762,
+          "executableTradeQuantity": 116.7,
+          "executableNotionalQuoteAmount": 29.9919,
+          "display": "10%"
+        },
+        "sell_targets": [
+          {
+            "price": "0.2600",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.33
+          },
+          {
+            "price": "0.2700",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.33
+          },
+          {
+            "price": "0.2800",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 0.34
+          }
+        ],
+        "stop_loss": {
+          "price": "0.1800",
+          "symbol": "ADA-USDT",
+          "opened": true,
+          "status": "new",
+          "role": "SL",
+          "side": "SELL",
+          "type": "STOP_LOSS_LIMIT"
+        },
+        "auto_Trade": {
+          "channel_id": -100,
+          "channelName": "Fixture channel",
+          "message_id": 7,
+          "usingChannelConfig": true,
+          "exchangeClientName": "Fixture account"
+        },
+        "tradeLeverage": "3x",
+        "futuresMarginMode": "isolated",
+        "positionConfiguration": {
+          "accountingModel": "ORDER_LEDGER_V1"
+        },
+        "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:ADAUSDT",
+        "routing": {
+          "jobType": "create_trade",
+          "provider": "BingX",
+          "market": "futures",
+          "symbol": "ADAUSDT",
+          "partitionKey": "client-symbol:account-1:futures:ADAUSDT"
+        }
+      },
+      "client_data": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      }
+    }
+  },
+  {
+    "name": "small_pro_single_target",
+    "job": {
+      "jobType": "create_trade",
+      "version": 1,
+      "channelID": -100,
+      "messageId": 7,
+      "tradeExpiresAt": 4102444800000,
+      "signalData": {
+        "symbol": "ADAUSDT",
+        "exchange_client": "_futures",
+        "is_long": true,
+        "leverage": "3x",
+        "buy_targets": [
+          "0.2570"
+        ],
+        "sell_targets": [
+          "0.26"
+        ],
+        "stop_loss": "0.18"
+      },
+      "channelSettings": {
+        "default_quantity": 0.1,
+        "default_buy_targets": [
+          {
+            "fraction": 1
+          }
+        ],
+        "default_sell_targets": [
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.33
+          },
+          {
+            "fraction": 0.34
+          }
+        ],
+        "strategy": "basic",
+        "id": -100,
+        "name": "Fixture channel",
+        "xPro": 1
+      },
+      "client": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      },
+      "marketData": {
+        "bingXFutures": {
+          "currPrice": "0.2570",
+          "symbolInfo": {
+            "symbol": "ADA-USDT",
+            "status": 1,
+            "tickSize": "0.0001",
+            "lotSize": "0.1",
+            "minQty": "0.1",
+            "minNotional": 5
+          }
+        }
+      },
+      "openedTrades": [],
+      "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:ADAUSDT",
+      "partitionKey": "client-symbol:account-1:futures:ADAUSDT",
+      "provider": "BingX",
+      "market": "futures",
+      "symbol": "ADAUSDT"
+    },
+    "balance": 40,
+    "route": "HEDGE_V1",
+    "expected": {
+      "expires_at": 4102444800000,
+      "trade_object": {
+        "id": "78f86d21a659eb9c8212b8b224efa062",
+        "exch_client": "_binance_futures_",
+        "is_long": true,
+        "state": "NEW",
+        "quantity": 46.6,
+        "symbol": "ADA-USDT",
+        "chat_id": 42,
+        "strategy": {
+          "name": "basic",
+          "is_pro": true,
+          "x_pro": 1,
+          "pro_sl_price": 0
+        },
+        "used_coins": {
+          "wished_quantity": 46.6
+        },
+        "precisions": {
+          "symbol": "ADA-USDT",
+          "priceRangeUp": 5,
+          "priceRangeDown": 0.5,
+          "tickSize": "0.0001",
+          "minQty": 19.455252918287936,
+          "maxQty": 389105.05836575874,
+          "minNotional": 5,
+          "lotSize": "0.1"
+        },
+        "buy_targets": [
+          {
+            "price": "0.2570",
+            "quantity": 46.6,
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "BT",
+            "side": "BUY",
+            "type": "LIMIT",
+            "fraction": 1
+          }
+        ],
+        "positionSizing": {
+          "mode": "dynamic",
+          "source": "channel",
+          "balanceFraction": 0.1,
+          "requestedQuoteAmount": 4,
+          "effectiveQuoteAmount": 4,
+          "balanceFallbackApplied": false,
+          "fallbackUsageRatio": null,
+          "marginQuoteAmount": 4,
+          "notionalQuoteAmount": 12,
+          "rawTradeQuantity": 46.69260700389105,
+          "executableTradeQuantity": 46.6,
+          "executableNotionalQuoteAmount": 11.9762,
+          "display": "10%"
+        },
+        "sell_targets": [
+          {
+            "price": "0.2600",
+            "symbol": "ADA-USDT",
+            "opened": true,
+            "status": "new",
+            "role": "ST",
+            "side": "SELL",
+            "type": "LIMIT",
+            "fraction": 1
+          }
+        ],
+        "stop_loss": {
+          "price": "0.1800",
+          "symbol": "ADA-USDT",
+          "opened": true,
+          "status": "new",
+          "role": "SL",
+          "side": "SELL",
+          "type": "STOP_LOSS_LIMIT"
+        },
+        "auto_Trade": {
+          "channel_id": -100,
+          "channelName": "Fixture channel",
+          "message_id": 7,
+          "usingChannelConfig": true,
+          "exchangeClientName": "Fixture account"
+        },
+        "tradeLeverage": "3x",
+        "futuresMarginMode": "isolated",
+        "positionConfiguration": {
+          "accountingModel": "ORDER_LEDGER_V1"
+        },
+        "idempotencyKey": "auto-trade:-100:7:42:account-1:BingX:futures:ADAUSDT",
+        "routing": {
+          "jobType": "create_trade",
+          "provider": "BingX",
+          "market": "futures",
+          "symbol": "ADAUSDT",
+          "partitionKey": "client-symbol:account-1:futures:ADAUSDT"
+        }
+      },
+      "client_data": {
+        "clientId": "account-1",
+        "provider": "BingX",
+        "chatId": 42,
+        "key": "fixture-key",
+        "keySecret": "fixture-secret",
+        "name": "Fixture account"
+      }
+    }
+  }
+]

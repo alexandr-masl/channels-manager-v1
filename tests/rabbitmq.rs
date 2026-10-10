@@ -1483,7 +1483,7 @@ async fn binary_telegram_notification_failure_does_not_block_jobs() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "starts isolated services; requires loopback access"]
-async fn binary_dual_consumers_prepare_publish_and_admit_without_creating_trades() {
+async fn binary_dual_consumers_publish_final_trades() {
     binary_signal(true, false, true).await;
 }
 
@@ -1768,7 +1768,7 @@ async fn binary_signal(publish: bool, notification_error: bool, worker: bool) {
                 if log.starts_with("Signal published:") {
                     published = Some(log.clone());
                 }
-                if log.starts_with("Client job admitted:") {
+                if log.starts_with("Client trade published:") {
                     admitted = Some(log);
                 }
                 if (!worker || admitted.is_some())
@@ -1782,13 +1782,40 @@ async fn binary_signal(publish: bool, notification_error: bool, worker: bool) {
         .unwrap();
         if let Some(admitted) = admitted {
             assert!(admitted.contains("positionConfiguration=ORDER_LEDGER_V1"));
-            assert!(admitted.contains("execution_enabled=false"));
         }
         assert!(published.starts_with("Signal published: "), "{published}");
         let report: serde_json::Value =
             serde_json::from_str(published.strip_prefix("Signal published: ").unwrap()).unwrap();
         assert_eq!(report["published_jobs"], 1);
         assert!(!published.contains("must-not-log"));
+        if worker {
+            let message = channel
+                .basic_get(DEFAULT_TRADE_QUEUE.into(), BasicGetOptions::default())
+                .await
+                .unwrap()
+                .expect("confirmed final trade queued");
+            let trade: serde_json::Value = serde_json::from_slice(&message.data).unwrap();
+            assert_eq!(trade["expires_at"], summary["expires_at_ms"]);
+            assert_eq!(
+                trade["trade_object"]["positionConfiguration"]["accountingModel"],
+                "ORDER_LEDGER_V1"
+            );
+            assert_eq!(trade["client_data"]["clientId"], "integration-account");
+            assert_eq!(trade["client_data"]["key"], "must-not-log-api-key");
+            assert_eq!(trade["client_data"]["keySecret"], "must-not-log-api-secret");
+            assert_eq!(trade.as_object().unwrap().len(), 3);
+            assert!(
+                trade["trade_object"]["id"]
+                    .as_str()
+                    .is_some_and(|id| !id.is_empty())
+            );
+            assert_eq!(message.properties.delivery_mode(), &Some(1));
+            assert_eq!(
+                message.properties.content_type().as_ref().unwrap().as_str(),
+                "application/json"
+            );
+            message.ack(BasicAckOptions::default()).await.unwrap();
+        }
         if !worker {
             let message = channel
                 .basic_get(BINGX_FUTURES_QUEUE.into(), BasicGetOptions::default())

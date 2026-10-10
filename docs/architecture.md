@@ -11,7 +11,8 @@ It prepares client jobs and logs summaries. With `CLIENT_TRADE_JOB_FANOUT_ENABLE
 it confirms publication before acknowledging intake; the default remains preparation-only.
 An optional outbound Telegram sender replies `created ✅` after preparation when
 `SATOSHI_TG_TOKEN` is configured. The optional client worker validates settings and
-BingX admission with automatic eligible Hedge switching; trade construction/publication remains planned.
+BingX admission with automatic eligible Hedge switching, constructs trades and
+confirms publication to Trading Station before acknowledging client jobs.
 The workflows below extend the initial client-job migration to include signal intake.
 
 ## Workflows
@@ -160,7 +161,8 @@ Decimal strings and leverage notation retain TypeScript wire compatibility.
 `TelegramHandler` logs `Signal parsed: ... result=<JSON>` and the context summary
 when eligible accounts exist. Other outcomes log a static skip/rejection reason.
 Signal preparation and optional confirmed job fan-out now follow context loading;
-account admission with automatic eligible Hedge switching is implemented. Trade construction remains planned.
+account admission, automatic eligible Hedge switching, trade construction and
+confirmed publication are implemented.
 
 ### Compatibility trace (2026-10-04)
 

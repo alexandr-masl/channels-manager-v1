@@ -400,3 +400,38 @@ fn consumer_role_settings_reject_invalid_values() {
         );
     }
 }
+
+#[test]
+fn static_fallback_ratio_is_positive_and_at_most_one() {
+    let mut env = environment();
+    assert_eq!(
+        AppConfig::from_lookup(|k| env.get(k).cloned())
+            .unwrap()
+            .static_low_balance_fallback_ratio_futures,
+        0.95
+    );
+    for value in ["0", "-0.1", "1.01", "NaN", "inf"] {
+        env.insert(
+            "STATIC_LOW_BALANCE_FALLBACK_RATIO_FUTURES".into(),
+            value.into(),
+        );
+        assert_eq!(
+            AppConfig::from_lookup(|k| env.get(k).cloned())
+                .unwrap_err()
+                .setting,
+            "STATIC_LOW_BALANCE_FALLBACK_RATIO_FUTURES"
+        );
+    }
+    for value in ["0.5", "1"] {
+        env.insert(
+            "STATIC_LOW_BALANCE_FALLBACK_RATIO_FUTURES".into(),
+            value.into(),
+        );
+        assert_eq!(
+            AppConfig::from_lookup(|k| env.get(k).cloned())
+                .unwrap()
+                .static_low_balance_fallback_ratio_futures,
+            value.parse::<f64>().unwrap()
+        );
+    }
+}

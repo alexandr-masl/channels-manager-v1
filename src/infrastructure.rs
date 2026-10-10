@@ -17,6 +17,8 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct WorkerServices {
+    pub trade_publication: crate::trading::publication::TradePublication,
+    pub static_low_balance_fallback_ratio_futures: f64,
     pub admission_client: Arc<crate::exchanges::bingx::client::BingxReadClient>,
     pub operation_timeout: Duration,
     pub telegram_sender: Option<Arc<crate::telegram::sender::TelegramSender>>,
@@ -40,6 +42,8 @@ pub trait DeliveryHandler: Send + Sync + 'static {
     ) -> BoxFuture<'static, Result<(), RabbitError>>;
 }
 pub struct Infrastructure {
+    trade_publication: crate::trading::publication::TradePublication,
+    static_low_balance_fallback_ratio_futures: f64,
     telegram_sender: Option<Arc<crate::telegram::sender::TelegramSender>>,
     job_publication: Option<crate::signals::publication::JobPublication>,
     market: Arc<crate::exchanges::bingx::market_data::BingxMarketData>,
@@ -141,6 +145,12 @@ impl Infrastructure {
             })
             .transpose()?;
         Ok(Self {
+            trade_publication: crate::trading::publication::TradePublication::new(
+                config.rabbitmq.retry_max_attempts.get(),
+                config.rabbitmq.retry_delay,
+            ),
+            static_low_balance_fallback_ratio_futures: config
+                .static_low_balance_fallback_ratio_futures,
             telegram_sender,
             job_publication: config.client_trade_job_fanout_enabled.then(|| {
                 crate::signals::publication::JobPublication::new(
@@ -171,6 +181,9 @@ impl Infrastructure {
                 continue;
             }
             let services = WorkerServices {
+                trade_publication: self.trade_publication.clone(),
+                static_low_balance_fallback_ratio_futures: self
+                    .static_low_balance_fallback_ratio_futures,
                 admission_client: self.admission_client.clone(),
                 operation_timeout: self.operation_timeout,
                 telegram_sender: self.telegram_sender.clone(),

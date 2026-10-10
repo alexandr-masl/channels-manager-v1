@@ -96,7 +96,7 @@ async fn matrix_switches_only_eligible_accounts_and_sets_trade_configuration() {
             };
             let wire = serde_json::to_value(envelope).unwrap();
             assert_eq!(
-                wire["trade_object"]["positionConfiguration"],
+                wire["trade_object"]["positionConfiguration"]["accountingModel"],
                 serde_json::to_value(route).unwrap()
             );
             assert_eq!(wire["trade_object"]["id"], "stable-id");

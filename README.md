@@ -98,8 +98,8 @@ By default, messages are acknowledged after preparation logging.
 To publish jobs, set `CLIENT_TRADE_JOB_FANOUT_ENABLED=true` in `.env.local` and restart.
 The terminal then shows `Signal published:` with the confirmed `published_jobs` count.
 Jobs go to `satoshi-channel-updates.client-trade.bingx.futures`; Telegram messages
-are acknowledged after all job confirms. The Rust consumer currently performs admission only; enable publication with an
-intended compatible consumer.
+are acknowledged after all job confirms. The Rust worker validates, builds and
+publishes trades when `CLIENT_TRADE_WORKER_ENABLED=true`.
 An existing TypeScript worker can execute these jobs. Coordinate exclusive ownership
 of Telegram intake and client-job consumption before using a shared broker.
 The configured databases must contain the channel, connected BingX accounts and active
@@ -137,7 +137,7 @@ For containers, inject `SATOSHI_TG_TOKEN` through the runtime environment (a
 Kubernetes Secret in the cluster); never include it in the image or manifest.
 
 
-### Client-job admission worker (slice 3)
+### Client-job worker (slices 3–4)
 
 For an isolated workflow test, set:
 
@@ -148,15 +148,21 @@ CLIENT_TRADE_WORKER_ENABLED=true
 CLIENT_TRADE_WORKER_PREFETCH=2
 ```
 
-Restart `cargo run`. Accepted jobs log `Client job admitted` with `positionConfiguration`, margin mode
-and expiry. Rejections and temporary dependency retries have separate logs.
+Restart `cargo run`. Confirmed trades log `Client trade published` with
+`positionConfiguration` and expiry. Rejections and temporary dependency retries have separate logs.
 The worker checks settings, symbol metadata, position mode, managed leverage owners,
 USDT balance and requested leverage. Eligible flat One-Way accounts automatically
 switch to Hedge with one signed POST; success needs no confirmation GET. Switch
 errors/timeouts log and ACK the job without automatic retry.
 
-**Admission only:** jobs are acknowledged after checking; no trades are created or
-published until slice 4. Keep the worker disabled on a live execution queue. For a
-worker-only test, set `TELEGRAM_INTAKE_ENABLED=false`; role prefetch and retry queues
-are independent. Hedge switching is active whenever the worker is enabled. No
+The worker publishes `{expires_at, trade_object, client_data}` to
+`create-new-trusted-trade` (or `RABBITMQ_QUEUE`) and ACKs only after confirmation.
+The trade includes `positionConfiguration.accountingModel` (`ORDER_LEDGER_V1` or
+`ONE_WAY_V1`), sizing metadata and entry/profit/stop targets. Trading Station executes
+orders. Use isolated infrastructure for tests and coordinate queue ownership at cutover.
+
+Static sizing falls back to 95% of free balance when the requested margin exceeds it;
+`STATIC_LOW_BALANCE_FALLBACK_RATIO_FUTURES` changes that ratio (greater than 0, at most 1).
+For a worker-only run, set `TELEGRAM_INTAKE_ENABLED=false`; role prefetch and retry
+queues are independent. Hedge switching is active whenever the worker is enabled. No
 trade-count limits, leverage changes, execution claims or execution locks are applied. See [implementation plan](docs/signal-manager.md).

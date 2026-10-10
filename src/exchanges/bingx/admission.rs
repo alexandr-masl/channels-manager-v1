@@ -19,7 +19,7 @@ impl AdmittedAccount {
     pub fn apply_to_trade_object(&self, trade: &mut serde_json::Map<String, Value>) {
         trade.insert(
             "positionConfiguration".into(),
-            Value::String(self.position_configuration.as_str().into()),
+            serde_json::json!({"accountingModel":self.position_configuration.as_str()}),
         );
     }
 }

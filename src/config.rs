@@ -43,6 +43,7 @@ impl std::error::Error for ConfigError {}
 
 #[derive(Debug)]
 pub struct AppConfig {
+    pub static_low_balance_fallback_ratio_futures: f64,
     pub telegram_intake_enabled: bool,
     pub client_trade_worker_enabled: bool,
     pub client_trade_worker_prefetch: NonZeroU16,
@@ -287,7 +288,16 @@ impl AppConfig {
             service_revision: reader.text("SERVICE_REVISION", Some("channels-manager-v1"))?,
         };
         runtime.validate()?;
+        let static_low_balance_fallback_ratio_futures =
+            reader.ratio("STATIC_LOW_BALANCE_FALLBACK_RATIO_FUTURES", 0.95)?;
+        if static_low_balance_fallback_ratio_futures <= 0.0 {
+            return Err(ConfigError {
+                setting: "STATIC_LOW_BALANCE_FALLBACK_RATIO_FUTURES",
+                reason: "must be greater than 0 and at most 1",
+            });
+        }
         Ok(Self {
+            static_low_balance_fallback_ratio_futures,
             telegram_intake_enabled: reader.boolean("TELEGRAM_INTAKE_ENABLED", true)?,
             client_trade_worker_enabled: reader.boolean("CLIENT_TRADE_WORKER_ENABLED", false)?,
             client_trade_worker_prefetch: reader.port("CLIENT_TRADE_WORKER_PREFETCH", 2)?,

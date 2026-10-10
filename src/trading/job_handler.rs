@@ -27,16 +27,53 @@ impl DeliveryHandler for ClientTradeHandler {
                 .await;
             let settlement = match outcome {
                 WorkerOutcome::Admitted(prepared) => {
-                    println!(
-                        "Client job admitted: channel_id={} message_id={} symbol={} positionConfiguration={} margin_mode={} expires_at_ms={} execution_enabled=false",
-                        prepared.job.channel_id,
-                        prepared.job.message_id,
-                        prepared.job.symbol,
-                        prepared.admission.position_configuration.as_str(),
-                        prepared.settings.margin_mode,
-                        prepared.job.trade_expires_at.unwrap()
-                    );
-                    DeliveryOutcome::Completed
+                    use crate::exchanges::bingx::trade_builder::{TradeBuildError, build_trade};
+                    match build_trade(
+                        &prepared,
+                        services.static_low_balance_fallback_ratio_futures,
+                        super::publication::now_ms(),
+                    ) {
+                        Ok(trade) => match services
+                            .trade_publication
+                            .publish(&trade, &prepared.job.idempotency_key, &services.publisher)
+                            .await
+                        {
+                            Ok(()) => {
+                                println!(
+                                    "Client trade published: channel_id={} message_id={} symbol={} positionConfiguration={} expires_at_ms={}",
+                                    prepared.job.channel_id,
+                                    prepared.job.message_id,
+                                    prepared.job.symbol,
+                                    prepared.admission.position_configuration.as_str(),
+                                    trade.expires_at
+                                );
+                                DeliveryOutcome::Completed
+                            }
+                            Err(RabbitError::Expired) => {
+                                println!("Client trade expired before publication");
+                                DeliveryOutcome::Rejected
+                            }
+                            Err(
+                                RabbitError::Nack | RabbitError::Unroutable | RabbitError::Timeout,
+                            ) => {
+                                println!(
+                                    "Client trade publication retry: reason=publicationRejected"
+                                );
+                                DeliveryOutcome::PreClaimRetry(RetryReason::DependencyUnavailable)
+                            }
+                            // Dropping an unsettled delivery faults its session;
+                            // recovery returns the source to the broker.
+                            Err(error) => return Err(error),
+                        },
+                        Err(TradeBuildError::Expired) => {
+                            println!("Client trade expired before construction");
+                            DeliveryOutcome::Rejected
+                        }
+                        Err(TradeBuildError::Rejected(reason)) => {
+                            println!("Client trade rejected: reason={reason}");
+                            DeliveryOutcome::Rejected
+                        }
+                    }
                 }
                 WorkerOutcome::Rejected(reason) => {
                     println!("Client job rejected: reason={reason:?}");
@@ -51,7 +88,6 @@ impl DeliveryHandler for ClientTradeHandler {
                     DeliveryOutcome::PreClaimRetry(RetryReason::DependencyUnavailable)
                 }
             };
-            // Slice 3 is admission-only. There is deliberately no trade publisher call.
             services
                 .delivery_policy
                 .settle(delivery, settlement, &services.publisher)
