@@ -38,12 +38,12 @@ fn owner() -> Value {
     json!({"id":"t","exchangeClientId":"account","exchange_client":"_binance_futures_","symbol":"BTC-USDT","state":"OPENED","is_long":true,"tradeLeverage":"5x"})
 }
 #[test]
-fn ownership_fails_closed() {
+fn stored_leverage_does_not_block_admission() {
     let a = account(true);
     assert!(admit(&a, &[owner()]).is_ok());
     let mut o = owner();
     o["tradeLeverage"] = json!(6);
-    assert_eq!(admit(&a, &[o.clone()]), Err("leverageConflict"));
+    assert_eq!(admit(&a, &[o.clone()]), Ok("ORDER_LEDGER_V1"));
     o["tradeLeverage"] = Value::Null;
     assert_eq!(admit(&a, &[o]), Ok("ORDER_LEDGER_V1"));
     let mut o = owner();
@@ -200,11 +200,11 @@ fn malformed_leverage_strings_and_duplicate_owners_fail_closed() {
     assert_eq!(admit(&account(true), &[o]), Ok("ORDER_LEDGER_V1"));
 }
 #[test]
-fn closing_ownership_and_side_specific_limits_are_preserved() {
+fn closing_stored_leverage_does_not_block_and_side_limits_are_preserved() {
     let mut o = owner();
     o["state"] = json!("CLOSING");
     o["tradeLeverage"] = json!(6);
-    assert_eq!(admit(&account(true), &[o]), Err("leverageConflict"));
+    assert_eq!(admit(&account(true), &[o]), Ok("ORDER_LEDGER_V1"));
     let mut a = account(true);
     a.leverage["maxShortLeverage"] = json!(1);
     assert!(admit(&a, &[]).is_ok());
@@ -353,4 +353,49 @@ fn mode_matrix_distinguishes_migration_from_blocked_and_legacy_accounts() {
             assert_eq!(result.unwrap(), ModeDecision::MigrateToHedge);
         }
     }
+}
+
+#[test]
+fn leverage_change_uses_live_symbol_and_side_activity() {
+    use channels_manager_v1::exchanges::bingx::admission::plan_admission;
+    for is_long in [true, false] {
+        for orders in [true, false] {
+            for symbol in ["BTC-USDT", "ETH-USDT"] {
+                for side in ["LONG", "SHORT", "BOTH"] {
+                    for amount in [0, 1] {
+                        let mut a = account(true);
+                        let row = if orders {
+                            json!({"symbol":symbol,"positionSide":side,"orderId":"o","side":"BUY","type":"LIMIT","origQty":1})
+                        } else {
+                            json!({"symbol":symbol,"positionSide":side,"positionId":"p","positionAmt":amount})
+                        };
+                        if orders {
+                            a.orders = json!([row]);
+                        } else {
+                            a.positions = json!([row]);
+                        }
+                        let result =
+                            plan_admission(&a, &[owner()], "account", "BTC-USDT", is_long, 6);
+                        let affected = symbol == "BTC-USDT"
+                            && (side == "BOTH" || side == if is_long { "LONG" } else { "SHORT" });
+                        if affected && (orders || amount != 0) {
+                            assert_eq!(result.unwrap_err().code, "leverageChangeBlocked");
+                        } else {
+                            assert_eq!(
+                                result.unwrap().1,
+                                Some(if is_long { "LONG" } else { "SHORT" })
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut a = account(true);
+    a.positions =
+        json!([{"positionId":"p","symbol":"BTC-USDT","positionSide":"LONG","positionAmt":1}]);
+    assert!(
+        admit(&a, &[]).is_ok(),
+        "matching leverage needs no mutation"
+    );
 }

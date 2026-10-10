@@ -2,9 +2,10 @@
 
 2026-10-10 · Base version · BingX Futures only.
 
-Slices 1–4 implemented: intake prepares/publishes jobs; the optional worker validates
+Slices 1–4 implemented: intake prepares/publishes jobs; the worker validates
 admission, builds trades and confirms publication before acknowledgement.
-Slice 5 (cutover verification) remains planned.
+Slice 5 provides isolated acceptance coverage and the cutover runbook. Live staging
+acceptance and deployment remain operator actions.
 
 Source of truth: TypeScript `src/handlers/signal-manager.ts`,
 `src/market-data/signal-market-data.ts`, and the BingX trade creation flow.
@@ -29,7 +30,7 @@ remain separate work.
 The signal manager prepares work for all eligible accounts. Each execution job
 handles one account. Trading Station owns order execution and ongoing management.
 Initially both consumers run in one process with separate prefetch/concurrency
-limits and explicit queue registration; either role can be disabled for cutover.
+limits and explicit queue registration; Telegram intake can be disabled for worker-only cutover.
 
 ## Interfaces and modules
 
@@ -96,7 +97,7 @@ acceptance store or claim records.
    takes precedence using the original balance-fraction semantics.
 3. Perform BingX symbol/account-mode/balance/leverage checks. Preserve the original
    decision matrix, automatically switching eligible One-Way accounts to Hedge.
-   A successful POST is sufficient; leverage mutations remain separate work.
+   A successful POST is sufficient; leverage adjustment follows admission.
 4. Build quantities and entry/profit/stop targets using original precision, minimum
    size and sizing rules. BREAKOUT selects STOP_LOSS_LIMIT entry targets.
 5. Produce the original trade_object/client_data envelope, stable trade ID and
@@ -112,10 +113,9 @@ redelivery; this version has no execution claims or exactly-once guarantee.
 ## Implementation slices
 
 1. **Signal preparation:** OPENED queries, market-data adapter, job builder,
-   fixture tests and sanitized job-summary logging. Explicitly keep this stage
-   in preparation-only mode; it acknowledges after logging without publishing.
+   fixture tests and sanitized job-summary logging; accepted work continues to publication.
 2. **Job publication:** client-job destination, confirms, bounded fan-out/retries,
-   expiry checks and Telegram settlement. Enable only with an intended consumer.
+   expiry checks and Telegram settlement; publication is always active.
 3. **Worker settings/admission:** consumer wiring, job validation, configuration
    precedence and bounded BingX checks.
 4. **Trade construction/publication:** sizing, target types, exact trade envelope,
@@ -131,7 +131,7 @@ redelivery; this version has no execution claims or exactly-once guarantee.
 - Empty context, invalid symbol/settings, expired jobs and dependency failures.
 - Partial confirms, lost acknowledgements, queue-specific retries and diagnostics.
 - Known duplicate-delivery behavior without claiming deduplication guarantees.
-- No credentials in logs/errors; no job publication in preparation-only mode.
+- No credentials in logs/errors; accepted work publishes without enablement flags.
 
 Log channel/message IDs, canonical symbol, eligible/prepared/published counts,
 expiry and static outcome codes. Never log full jobs, client records or API secrets.
@@ -159,11 +159,10 @@ quote routes and response fields: [BingX swap market API](https://github.com/Bin
 - [x] Add a client-job publication envelope/destination and ephemeral queue declaration.
 - [x] Publish sequentially per signal; reuse serialized bytes for bounded definite
   rejection retries, checking expiry before every attempt. Stop on uncertain confirms.
-- [x] Gate publication with `CLIENT_TRADE_JOB_FANOUT_ENABLED=false` by default.
-  ACK completed/expired batches; use bounded source retry for definite failures;
+- [x] Publish every prepared batch. ACK completed/expired batches; use bounded source retry for definite failures;
   leave uncertain deliveries unacknowledged for transport recovery.
-- [x] Test byte reuse, partial failure, expiry, missing routes and enabled/disabled
-  binary behavior against isolated services; update operation instructions.
+- [x] Test byte reuse, partial failure, expiry, missing routes and automatic
+  binary publication against isolated services; update operation instructions.
 
 BingX reference: `../trading-station-rust/src/exchange/bingx/futures.rs` provides
 signed requests, sensitive API-key headers, bounded responses and explicit uncertain
@@ -172,10 +171,8 @@ order outcomes. Account/order methods belong to slices 3–4; slice 2 adds no ex
 
 ## Publication runtime
 
-`CLIENT_TRADE_JOB_FANOUT_ENABLED` defaults to `false`. Enable it only with an
-intended compatible consumer on `satoshi-channel-updates.client-trade.bingx.futures`.
-The optional Rust admission consumer is described below. Preparation-only mode still
-logs and ACKs; enabled mode logs `Signal published` with confirmed counts.
+Client jobs always publish to `satoshi-channel-updates.client-trade.bingx.futures`.
+The Rust worker always consumes this queue. `Signal published` records confirmed counts.
 
 Jobs use the default exchange, non-durable queue, non-persistent JSON messages,
 mandatory routing and confirms. Fan-out is sequential per signal, also bounded by
@@ -194,14 +191,14 @@ there is no execution deduplication or exactly-once guarantee in this slice.
 ## Acceptance reply
 
 When `SATOSHI_TG_TOKEN` is set, `telegram/sender.rs` sends `created ✅` as a reply
-to the source channel message after preparation, before optional job publication.
+to the source channel message after preparation, before job publication.
 This is signal acceptance, not confirmed trade execution. The sender does not
 consume Telegram updates, change webhooks or emit the original long trade announcement.
 
 One bounded HTTP attempt (at most five seconds), no redirects, a 64 KiB response
 limit and sanitized errors. Failures are logged and job processing continues;
 notification errors alone never retry the source. Source redelivery may repeat
-notifications. Preparation-only mode also sends replies when a token is configured.
+notifications. Replies require a configured token.
 The default endpoint is `https://api.telegram.org`; `TELEGRAM_API_BASE_URL` allows
 only numeric HTTP loopback origins for tests. No Redis notification channel is used.
 
@@ -218,16 +215,15 @@ only numeric HTTP loopback origins for tests. No Redis notification channel is u
 - [x] Bound the entire admission by operation timeout and remaining job expiry;
   retry temporary read failures, reject invalid/expired jobs, log admitted summaries.
 - [x] Prove settings, admission, dual-consumer settlement and recovery with fixtures
-  and isolated services. Worker is off by default; when enabled it now continues
-  through slice 4 and confirms trade publication before ACK.
+  and isolated services. The worker always runs and confirms trade publication before ACK.
 
 
 ## Worker admission runtime
 
-`TELEGRAM_INTAKE_ENABLED=true` and `CLIENT_TRADE_WORKER_ENABLED=false` are the defaults.
-Enabled workers build and publish final trades, logging `Client trade published`
+`TELEGRAM_INTAKE_ENABLED=true` is the default; set it false for worker-only mode.
+The worker always builds and publishes final trades, logging `Client trade published`
 after confirmation. Trading Station owns order execution.
-Disable the TypeScript consumer of this queue before enabling Rust on a shared broker.
+Disable the TypeScript consumer of this queue before starting Rust on a shared broker.
 `CONSUMER_PREFETCH` bounds Telegram work; `CLIENT_TRADE_WORKER_PREFETCH` (default 2)
 bounds account jobs. Each role has its own Rabbit session, publisher and retry queue;
 Mongo, Redis and reusable HTTP clients are shared. Both roles recover and drain together.
@@ -259,8 +255,12 @@ Admission retains typed `position_configuration`: Hedge (existing or switched) m
 to `ORDER_LEDGER_V1`; permitted One-Way maps to `ONE_WAY_V1`. The tested
 `AdmittedAccount::apply_to_trade_object` helper writes the nested
 `trade_object.positionConfiguration.accountingModel` used by the builder.
-Leverage mismatch still reports `leverageChangeRequired` or `ownedLeverageMismatch`;
-no leverage mutations occur.
+When leverage differs, the worker sets the signal leverage unless a live position
+or pending order exists on the affected symbol/side (`leverageChangeBlocked`).
+Stored managed leverage alone does not reject. Hedge updates LONG/SHORT; One-Way
+uses BOTH. The signed leverage POST must return the requested symbol and leverage.
+Errors/timeouts reject and ACK without readback or automatic mutation retry.
+See [leverage adjustment](leverage-admission-design.md) for the decision and tests.
 
 Every admission is bounded by `RUNTIME_OPERATION_TIMEOUT_MS` and remaining
 `tradeExpiresAt`. Temporary reads retry on the client queue with unchanged payload;
@@ -294,3 +294,13 @@ Integer market quotes use the tick's decimal width; decimal quotes preserve the
 original quote-width formatting. A trade without any profit targets is rejected,
 including the historical TypeScript reduction path that could omit sell_targets.
 Percentage profit targets remain outside the existing numeric-target parser contract.
+
+
+## Slice 5: verification and cutover
+
+Repository checks cover original TypeScript fixtures, the full pipeline and worker-only
+cutover with both accounting routes and untouched Telegram backlog. Deployment/Compose
+explicitly enable the full BingX flow; Kubernetes starts one replica and KEDA tracks
+both queues. Worker-only role/trigger changes, exclusive ownership and digest-based
+rollback are in [verification and rollout](verification-and-rollout.md).
+Live acceptance and cluster changes are not performed by this slice.

@@ -35,14 +35,9 @@ async fn main() -> ExitCode {
             "disabled (SATOSHI_TG_TOKEN unset)"
         }
     );
-    let publication_mode = if config.client_trade_job_fanout_enabled {
-        "client-job publication enabled"
-    } else {
-        "preparation only; client-job publication disabled"
-    };
     println!(
-        "Consumer roles: Telegram intake={}, BingX admission={}",
-        config.telegram_intake_enabled, config.client_trade_worker_enabled
+        "Consumer roles: Telegram intake={}, BingX trade worker=enabled; destination={}",
+        config.telegram_intake_enabled, config.rabbitmq.output_queue
     );
     let runtime = config.runtime.clone();
     let adapter = match Infrastructure::for_application(config) {
@@ -59,7 +54,9 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    println!("Starting infrastructure; Telegram intake mode: {publication_mode}.");
+    println!(
+        "Starting infrastructure; accepted signals publish client jobs and admitted trades publish to Trading Station."
+    );
     match run_until_signal(lifecycle).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

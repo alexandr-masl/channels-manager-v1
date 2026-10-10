@@ -94,12 +94,11 @@ channel ID `-1001596367704`. It publishes to the original bot queue
 The app validates the envelope/source time and logs `Signal parsed: ... result={...}`
 for the base USDT Futures format. Other messages log a skip/rejection reason.
 The terminal also shows `Signal prepared:` with job counts and `published_jobs: 0`.
-By default, messages are acknowledged after preparation logging.
-To publish jobs, set `CLIENT_TRADE_JOB_FANOUT_ENABLED=true` in `.env.local` and restart.
+Client-job publication and the BingX worker are always active.
 The terminal then shows `Signal published:` with the confirmed `published_jobs` count.
 Jobs go to `satoshi-channel-updates.client-trade.bingx.futures`; Telegram messages
 are acknowledged after all job confirms. The Rust worker validates, builds and
-publishes trades when `CLIENT_TRADE_WORKER_ENABLED=true`.
+publishes trades to `create-new-trusted-trade` (or `RABBITMQ_QUEUE`).
 An existing TypeScript worker can execute these jobs. Coordinate exclusive ownership
 of Telegram intake and client-job consumption before using a shared broker.
 The configured databases must contain the channel, connected BingX accounts and active
@@ -108,7 +107,7 @@ auto-trading subscriptions. Otherwise the workflow logs its skip reason.
 not the queue selected by `Infrastructure::for_telegram_intake`.
 
 Use a local broker/vhost without the TypeScript consumer: consumers sharing the
-same queue compete for messages. Keep publication disabled for preparation-only tests.
+same queue compete for messages. Use isolated services for workflow tests.
 
 
 Signal preparation loads per-user open trades and one shared BingX market snapshot.
@@ -120,8 +119,7 @@ execution claims/locks. See [signal manager design](docs/signal-manager.md).
 
 Set `SATOSHI_TG_TOKEN` in `.env.local` to the original bot token and restart
 `cargo run`. The app sends `created ✅` as a reply to the original channel message
-after successful preparation, before job publication. This also runs in
-preparation-only mode. Without the token, replies are disabled.
+after successful preparation, before job publication. Without the token, replies are disabled.
 
 The sender uses only Telegram's [sendMessage API](https://core.telegram.org/bots/api#sendmessage);
 it does not poll updates or modify webhooks. The bot needs posting permission in
@@ -143,8 +141,6 @@ For an isolated workflow test, set:
 
 ```env
 TELEGRAM_INTAKE_ENABLED=true
-CLIENT_TRADE_JOB_FANOUT_ENABLED=true
-CLIENT_TRADE_WORKER_ENABLED=true
 CLIENT_TRADE_WORKER_PREFETCH=2
 ```
 
@@ -164,5 +160,5 @@ orders. Use isolated infrastructure for tests and coordinate queue ownership at 
 Static sizing falls back to 95% of free balance when the requested margin exceeds it;
 `STATIC_LOW_BALANCE_FALLBACK_RATIO_FUTURES` changes that ratio (greater than 0, at most 1).
 For a worker-only run, set `TELEGRAM_INTAKE_ENABLED=false`; role prefetch and retry
-queues are independent. Hedge switching is active whenever the worker is enabled. No
+queues are independent. The worker and eligible Hedge switching are always active. No
 trade-count limits, leverage changes, execution claims or execution locks are applied. See [implementation plan](docs/signal-manager.md).

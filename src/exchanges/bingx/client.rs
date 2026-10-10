@@ -126,6 +126,42 @@ impl BingxReadClient {
             }),
         }
     }
+    pub async fn set_leverage(
+        &self,
+        key: &str,
+        secret: &str,
+        symbol: &str,
+        leverage: u32,
+        side: &str,
+    ) -> Result<(), ReadError> {
+        let failure = || ReadError {
+            code: "leverageChangeFailed",
+            retryable: false,
+        };
+        if !super::admission::valid_symbol(symbol)
+            || leverage == 0
+            || !matches!(side, "LONG" | "SHORT" | "BOTH")
+        {
+            return Err(failure());
+        }
+        let data = self
+            .request(
+                reqwest::Method::POST,
+                "/openApi/swap/v2/trade/leverage",
+                key,
+                secret,
+                &format!("symbol={symbol}&leverage={leverage}&side={side}&"),
+            )
+            .await
+            .map_err(|_| failure())?;
+        let returned = data["leverage"]
+            .as_u64()
+            .or_else(|| data["leverage"].as_str()?.parse().ok());
+        if data["symbol"].as_str() != Some(symbol) || returned != Some(leverage as u64) {
+            return Err(failure());
+        }
+        Ok(())
+    }
     async fn request(
         &self,
         method: reqwest::Method,

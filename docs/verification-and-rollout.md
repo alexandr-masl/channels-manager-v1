@@ -1,104 +1,117 @@
-# Verification and rollout
+# Verification and cutover
 
-## Run the complete checks
-
-Use a current stable Rust toolchain with rustfmt/Clippy, MongoDB 8.0, Redis 7,
-and RabbitMQ 3.12 or newer with its compatible Erlang runtime. Put `mongod`,
-`redis-server`, `rabbitmq-server`, and `epmd` on `PATH`. Alternatively set
-`MONGOD_BIN`, `REDIS_SERVER_BIN`, and `RABBITMQ_SERVER_BIN` to executable paths.
-On Debian/Ubuntu, use `/usr/lib/rabbitmq/bin/rabbitmq-server` to bypass the system
-service wrapper and run the broker as the test user.
+## Isolated acceptance checks
 
 ```sh
 ./scripts/verify.sh
 ```
 
-The script checks formatting, Clippy, build, and **all tests**, including ignored
-integration tests. Cargo uses the committed lockfile. Tests run sequentially to
-limit concurrent Erlang and database processes. A normal `cargo test` skips the
-local-service tests and is not the full acceptance check.
+Requires Rust with rustfmt/Clippy, `mongod`, `redis-server`, `rabbitmq-server` and
+`epmd` on PATH. Binary overrides: `MONGOD_BIN`, `REDIS_SERVER_BIN`,
+`RABBITMQ_SERVER_BIN`. On Debian/Ubuntu use `/usr/lib/rabbitmq/bin/rabbitmq-server`
+to bypass the system service wrapper. Run as an ordinary user.
 
-Tests start private loopback ports and temporary databases, including a single
-node MongoDB replica set for majority claims and uncertain-write injection.
-They do not load `.env` or connect to application environments. Fixtures own and
-stop their child processes and remove temporary data. Do not supply service URLs;
-only binary-path overrides are used. Run under your ordinary user, not root.
+The script checks formatting, Clippy, build and all tests, including ignored service
+tests. Fixtures use temporary databases, private loopback ports and simulated HTTP;
+they do not read `.env.local`, use live accounts or change your running services.
+A normal `cargo test` omits the service integration tests.
 
-## CI
+[CI](../.github/workflows/verify.yml) runs the same script on Ubuntu with installed
+MongoDB/Redis/RabbitMQ binaries. Local success does not establish hosted CI success.
 
-[Verify](../.github/workflows/verify.yml) runs on pushes, pull requests, and manual
-workflow dispatches on Ubuntu 24.04. It installs MongoDB 8.0 and the distribution's
-Redis/RabbitMQ packages, stops system instances, then runs the same script as
-local development. No application credentials or deployment permissions are used.
-Rust stable and OS package patch versions can advance; Cargo dependencies stay
-locked. Check the workflow logs for installed versions when comparing environments.
-
-Setup follows [MongoDB's Ubuntu installation instructions](https://www.mongodb.com/docs/v8.0/tutorial/install-mongodb-on-ubuntu/)
-and [GitHub's Rust workflow guidance](https://docs.github.com/en/actions/tutorials/build-and-test-code/rust).
-The hosted workflow must pass after pushing; local macOS execution does not prove
-Ubuntu package installation or hosted CI execution.
-
-## Acceptance coverage
-
-| Scenario | Evidence |
+| Coverage | Evidence |
 | --- | --- |
-| Startup outage and backlog | `startup_outage_preserves_backlog_until_required_dependency_recovers`: zero consumers, job stays queued, resumes after Redis returns |
-| Broker restart, idle disconnect, consumer cancellation | `lifecycle_recovers_idle_disconnect_and_consumer_cancellation`: real broker restart, connection cut, deleted input queue; restored consumer and confirmed output before/after new traffic |
-| Required dependency loss | Same lifecycle test: Redis loss cancels intake; queued work waits for recovery |
-| Queue contracts, returns, nacks, expiry | `rabbitmq_stage5_contracts`: topology and externally retrieved messages |
-| Lost confirm and stalled handshake | `lost_confirmation_is_uncertain_and_blocks_blind_replay`, `stalled_handshake_is_bounded_and_releases_socket` |
-| Poison jobs and bounded retries | `bounded_delivery_retries_preserve_payload_then_dead_letter`, `malformed_retry_metadata_cannot_reset_budget`: unchanged bytes/IDs/expiry, capped attempts, diagnostic JSON |
-| Failed retry/DLQ publication | `failed_retry_or_dead_letter_keeps_original_for_recovery`: original remains available for redelivery |
-| Mongo claims and uncertain writes | `mongodb_stage3_contracts`: one winner across 12 claimants; uncertain insert becomes duplicate; owner-checked terminal record; verified non-TTL index |
-| Redis lease loss and release races | `tests/redis.rs`: renewal, lost ownership, cancellation, atomic release, reconnect, isolated cache failure/fallback |
-| Shutdown and bounded concurrency | `concrete_lifecycle_bounds_workers_and_joins_cleanup`, lifecycle and signal tests: bounded handlers, drain/abort/join, deadlines, SIGINT/SIGTERM |
+| TypeScript sizing/target/payload parity | 12 original-helper cases in `tests/fixtures/bingx-trades.json`; `tests/trade_builder.rs` |
+| Hedge, automatic migration, legacy One-Way, rejection | `tests/bingx_admission.rs`, `tests/bingx_migration.rs` |
+| Full intake → job → final trade | `binary_dual_consumers_publish_final_trades` |
+| Worker-only ownership, both routes, custom destination, expiry/ID preservation | `worker_only_cutover_preserves_intake_backlog_and_publishes_both_routes` |
+| Retry bytes, limits, expiry, uncertain sends | `tests/trade_publication.rs` and RabbitMQ confirm/recovery tests |
+| Consumer recovery, source settlement, bounded shutdown | Dual-consumer, lifecycle and signal integration tests |
+| Settings precedence, invalid work, credential redaction | Worker settings/execution and config tests |
 
-Lifecycle phase assertions cover starting, retrying, running and recovery, plus
-actual intake gating. HTTP health/readiness endpoints belong to a separate issue.
-Tests use synthetic trade publication handlers; they do not validate BingX trade
-admission/construction or execute exchange operations.
+Regenerate comparison fixtures, when reviewing original-app changes:
 
-## Exclusive BingX Futures queue cutover
+```sh
+node tests/fixtures/generate_bingx_trades.cjs ../satoshi-channel-updates-manager
+cargo test --locked --test trade_builder
+```
 
-The current binary logs and acknowledges raw Telegram messages only. Replace
-the logging handler and select the BingX worker queue before production cutover.
-Complete and verify the business handler before this runbook is used for production. The queue is
-`satoshi-channel-updates.client-trade.bingx.futures`; TypeScript retains parsing
-and fan-out, and other provider queues remain owned by their existing workers.
+The generator uses only original pure helpers. Its sibling TypeScript/numeral
+packages must be installed. Commit fixture changes only after reviewing the diff.
+No TypeScript checkout or Node installation is needed to run the committed fixtures.
 
-1. Record the application revisions, broker/vhost, queue arguments, and all three
-   Mongo database names. Validate Rust configuration with `--check-config`, then
-   start infrastructure without a consumer and verify the claim index. Use the
-   same claims, account lease keys and downstream queue as TypeScript.
-2. Verify business-handler parity: stable work/trade identities, original
-   `expires_at`, account admission, terminal claims, and downstream duplicate
-   protection. Require a green complete verification run and staging evidence.
-3. Disable the TypeScript **BingX Futures consumer registration** on every pod.
-   Wait for its in-flight handlers to finish and its unacknowledged count to reach
-   zero. Confirm RabbitMQ reports zero consumers for this queue. Do not disable
-   all TypeScript parsing/fan-out or unrelated provider workers.
-4. Enable the Rust handler on one pod. Confirm exactly one Rust consumer, expected
-   prefetch, and no TypeScript consumers on the queue. Validate confirmed output,
-   unchanged expiry/IDs, duplicate suppression and admission/rejection outcomes
-   using controlled staging/canary work before increasing replicas.
-5. Observe retry/DLQ counts, required-dependency failures and downstream results.
-   Stop the rollout if duplicate execution, incompatible payloads, expired output,
-   or lost ownership is observed. Retain revision and verification evidence.
+## Current boundaries
 
-Deployment-specific consumer toggles must be supplied by the worker migration;
-there is no `--consume` flag in this binary. Queue ownership is operationally
-exclusive across implementations; multiple Rust pods may share it after cutover.
+- No trade-count limits, Mongo execution claims or Redis execution locks/deduplication.
+  Existing claim/lease infrastructure tests do not imply the worker uses them.
+- Leverage mismatch rejects; automatic leverage changes are not implemented.
+- Eligible One-Way accounts switch automatically; a successful POST has no readback.
+  Switch errors/timeouts stop and ACK the job; a timed-out write may have succeeded.
+- Percentage profit targets, Spot, other exchanges and command workflows remain outside
+  the current path. No health endpoints are added in this slice.
+- Integer quotes use tick decimal width. Trades without profit targets reject rather
+  than reproducing the original empty-target reduction path. Target IDs are stable.
+- Broker confirmation means accepted publication, not successful exchange execution.
+  Lost confirmation/redelivery can duplicate work; stable IDs alone do not prevent it.
+
+## Choose queue ownership
+
+| Mode | TELEGRAM_INTAKE_ENABLED |
+| --- | --- |
+| TypeScript intake → Rust BingX worker | false |
+| Full Rust BingX pipeline (default) | true |
+
+Client-job publication and the BingX worker are always active.
+
+Worker-only mode leaves TypeScript parsing/fan-out and unrelated queues running.
+Full mode transfers `tg_bot_channel_update` as well as
+`satoshi-channel-updates.client-trade.bingx.futures` to Rust. Full mode supports only
+the implemented BingX Futures flow; do not silently retire unrelated workflows.
+
+## Cutover checklist — operator actions
+
+1. Record source commits, the running image digest, original Deployment/KEDA manifests,
+   namespace, broker/vhost, output queue and all three Mongo database names. Use
+   `--check-config` for parsing validation; it does not prove dependency connectivity.
+2. Complete controlled staging tests against intended account settings. Check LONG/SHORT,
+   BREAKOUT, minimum balance rejection, Hedge/One-Way selection and expiry downstream.
+   Keep a stable trade ID and Trading Station outcome as evidence. Do not assume dedupe.
+3. Choose one ownership mode above. Disable the corresponding TypeScript consumers on
+   every workload. Drain their in-flight jobs and confirm zero consumers and zero
+   unacknowledged deliveries on each transferred queue before starting Rust.
+4. Apply the prepared one-replica Rust deployment. Names/image match the original;
+   if retaining TypeScript intake, it must run in another workload. Align KEDA triggers
+   with enabled queues. See [build/deploy commands](deployment.md).
+5. Confirm one Rust consumer per enabled queue and no TypeScript consumer there.
+   Check raw intake remains untouched in worker-only mode. Submit controlled work and
+   inspect final `expires_at`, stable `id`, `routing`, `client_data` and nested
+   `positionConfiguration.accountingModel` in the isolated/staging destination.
+6. Observe `Client trade published`, rejection/retry logs, queue depths and Trading
+   Station results. Increase replicas only after checks pass. Record the tested image
+   digest, outcome and operator approval; do not infer readiness from rollout status.
+
+RabbitMQ consumer and unacknowledged counts are available through its management UI
+or `rabbitmqctl list_queues -p <vhost> name consumers messages_ready messages_unacknowledged`.
+Identify consumer connections as well as counts; another deployment can own a queue.
 
 ## Rollback
 
-Stop Rust intake first and wait for bounded drain/cleanup. Confirm Rust consumers
-are gone and unacknowledged deliveries have settled or returned to the queue.
-Then restore the previous TypeScript BingX Futures consumer registration and
-verify its consumer count and output. Never run both implementations on this
-queue during the switch. Preserve Mongo claims and Redis lease keys; deleting
-claims to force replay can repeat exchange mutations.
+Stop Rust consumers and drain first; confirm their connections/consumers are gone.
+Restore the saved TypeScript manifests with the recorded image digest, role selection
+and KEDA triggers. Mutable `latest` makes `rollout undo` alone insufficient.
+Restore each queue to exactly one implementation. Preserve existing stored state.
 
-A broker restart may discard these non-durable queues/non-persistent messages.
-Do not republish expired signals to recreate backlog. A lost confirm may mean a
-publication already reached Trading Station; reconcile using stable identity and
-claims rather than manually replaying uncertain trade creation.
+Already acknowledged work is not recovered by rollback. Reconcile uncertain published
+trades with Trading Station using stable IDs before replaying anything. Do not replay
+expired signals. Non-durable queues/non-persistent messages may disappear on restart.
+
+## Release evidence
+
+Automated repository verification is separate from live acceptance. Record:
+
+- Commit and immutable image digest; CI run and local verification outcome.
+- Chosen ownership mode and before/after consumer counts.
+- Controlled trade IDs, expected accounting route and downstream outcomes.
+- Rollback image/manifests and operator sign-off.
+
+Live staging tests, image push, cluster cutover and operator sign-off remain manual.

@@ -22,8 +22,7 @@ Tech stack: Rust, existing JSON contracts, Tokio and RabbitMQ publisher.
   `cargo fmt --check`, and `cargo clippy --offline --locked --all-targets -- -D warnings`.
 
 Scope: no trade-count limits, execution claims/locks, leverage changes, live orders,
-notifications beyond the existing acceptance reply, or deployment. Existing worker
-flag now enables trade publication. Advanced delivery deduplication remains separate.
+notifications beyond the existing acceptance reply, or deployment. Client-job publication and the worker now always run. Advanced delivery deduplication remains separate.
 
 Verified: full isolated test suite (including ignored integration tests), formatting,
 Clippy with warnings denied, and spec/runtime reviews. No live orders or deployment.

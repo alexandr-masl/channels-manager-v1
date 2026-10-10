@@ -175,3 +175,145 @@ async fn expired_attempt_never_switches() {
     assert!(requests.lock().unwrap().is_empty());
     task.abort();
 }
+
+#[tokio::test]
+async fn empty_exchange_adjusts_leverage_despite_managed_value() {
+    let (client, requests, task) = server(
+        200,
+        r#"{"code":0,"data":{"symbol":"BTC-USDT","leverage":10}}"#,
+        Duration::ZERO,
+    )
+    .await;
+    let job = serde_json::from_str(include_str!("fixtures/admission-job.json")).unwrap();
+    let validated = validate_job(&job, 1).unwrap();
+    let mut a = account(true);
+    a.leverage["longLeverage"] = json!(5);
+    let mut owner = managed("BTC-USDT", "OPENED");
+    owner["tradeLeverage"] = json!(20);
+    let result = admit_with_migration(
+        &client,
+        &validated,
+        a,
+        &[owner],
+        &AdmissionAttempt::new(Duration::from_secs(1)),
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    let seen = requests.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].starts_with(
+        "POST /openApi/swap/v2/trade/leverage?symbol=BTC-USDT&leverage=10&side=LONG&"
+    ));
+    task.abort();
+}
+
+#[tokio::test]
+async fn leverage_sides_and_sequential_mode_change() {
+    for (hedge, is_long, other_activity, side, writes) in [
+        (true, true, false, "LONG", 1),
+        (true, false, false, "SHORT", 1),
+        (false, true, false, "LONG", 2),
+        (false, true, true, "BOTH", 1),
+    ] {
+        let (client, requests, task) = server(
+            200,
+            r#"{"code":0,"data":{"symbol":"BTC-USDT","leverage":10}}"#,
+            Duration::ZERO,
+        )
+        .await;
+        let mut job: ClientTradeJob =
+            serde_json::from_str(include_str!("fixtures/admission-job.json")).unwrap();
+        job.signal_data["is_long"] = json!(is_long);
+        let validated = validate_job(&job, 1).unwrap();
+        let mut a = account(hedge);
+        a.leverage["longLeverage"] = json!(5);
+        a.leverage["shortLeverage"] = json!(5);
+        if other_activity {
+            a.positions = json!([{"positionId":"p","symbol":"ETH-USDT","positionSide":"BOTH","positionAmt":1}]);
+        }
+        let attempt = AdmissionAttempt::new(Duration::from_secs(1));
+        assert!(
+            admit_with_migration(&client, &validated, a, &[], &attempt)
+                .await
+                .is_ok()
+        );
+        assert!(attempt.leverage_started());
+        let seen = requests.lock().unwrap();
+        assert_eq!(seen.len(), writes);
+        let request = seen.last().unwrap();
+        assert!(request.contains(&format!("leverage=10&side={side}&")));
+        let query = request
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .split_once('?')
+            .unwrap()
+            .1;
+        let (signed, signature) = query.rsplit_once("&signature=").unwrap();
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        let mut mac = Hmac::<Sha256>::new_from_slice(b"fixture-secret").unwrap();
+        mac.update(signed.as_bytes());
+        assert_eq!(signature, format!("{:x}", mac.finalize().into_bytes()));
+        task.abort();
+    }
+}
+#[tokio::test]
+async fn leverage_failures_stop_without_readback_or_retry() {
+    for (status, body, delay) in [
+        (503, "secret", Duration::ZERO),
+        (200, r#"{"code":1,"data":{}}"#, Duration::ZERO),
+        (
+            200,
+            r#"{"code":0,"data":{"symbol":"ETH-USDT","leverage":10}}"#,
+            Duration::ZERO,
+        ),
+        (
+            200,
+            r#"{"code":0,"data":{"symbol":"BTC-USDT","leverage":5}}"#,
+            Duration::ZERO,
+        ),
+        (200, "malformed", Duration::ZERO),
+        (200, r#"{"code":0,"data":{}}"#, Duration::from_millis(200)),
+    ] {
+        let (client, requests, task) = server(status, body, delay).await;
+        let job = serde_json::from_str(include_str!("fixtures/admission-job.json")).unwrap();
+        let validated = validate_job(&job, 1).unwrap();
+        let mut a = account(true);
+        a.leverage["longLeverage"] = json!(5);
+        let result = admit_with_migration(
+            &client,
+            &validated,
+            a,
+            &[],
+            &AdmissionAttempt::new(Duration::from_secs(1)),
+        )
+        .await;
+        assert_eq!(result.unwrap_err().code, "leverageChangeFailed");
+        assert_eq!(requests.lock().unwrap().len(), 1);
+        task.abort();
+    }
+}
+#[tokio::test]
+async fn expired_leverage_attempt_never_writes() {
+    let (client, requests, task) = server(200, r#"{"code":0,"data":{}}"#, Duration::ZERO).await;
+    let job = serde_json::from_str(include_str!("fixtures/admission-job.json")).unwrap();
+    let validated = validate_job(&job, 1).unwrap();
+    let mut a = account(true);
+    a.leverage["longLeverage"] = json!(5);
+    assert_eq!(
+        admit_with_migration(
+            &client,
+            &validated,
+            a,
+            &[],
+            &AdmissionAttempt::new(Duration::ZERO)
+        )
+        .await
+        .unwrap_err()
+        .code,
+        "admissionDeadlineExceeded"
+    );
+    assert!(requests.lock().unwrap().is_empty());
+    task.abort();
+}

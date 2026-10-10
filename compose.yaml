@@ -16,6 +16,9 @@ services:
       ACCOUNT_VALIDATOR_MONGO_PATH: mongodb://mongo-account-validator/McrAccValidator
       REDIS: redis
       REDIS_CLIENT_PORT: "6379"
+      TELEGRAM_INTAKE_ENABLED: "true"
+      CLIENT_TRADE_WORKER_PREFETCH: "2"
+      STATIC_LOW_BALANCE_FALLBACK_RATIO_FUTURES: "0.95"
       CLIENT_TRADE_WORKER_QUEUES: satoshi-channel-updates.client-trade.bingx.futures
       SERVICE_REVISION: channels-manager-v1
     depends_on:

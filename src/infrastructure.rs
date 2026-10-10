@@ -22,7 +22,7 @@ pub struct WorkerServices {
     pub admission_client: Arc<crate::exchanges::bingx::client::BingxReadClient>,
     pub operation_timeout: Duration,
     pub telegram_sender: Option<Arc<crate::telegram::sender::TelegramSender>>,
-    pub job_publication: Option<crate::signals::publication::JobPublication>,
+    pub job_publication: crate::signals::publication::JobPublication,
     pub mongo: MongoRepositories,
     pub market: Arc<crate::exchanges::bingx::market_data::BingxMarketData>,
     pub locks: LeaseManager,
@@ -45,7 +45,7 @@ pub struct Infrastructure {
     trade_publication: crate::trading::publication::TradePublication,
     static_low_balance_fallback_ratio_futures: f64,
     telegram_sender: Option<Arc<crate::telegram::sender::TelegramSender>>,
-    job_publication: Option<crate::signals::publication::JobPublication>,
+    job_publication: crate::signals::publication::JobPublication,
     market: Arc<crate::exchanges::bingx::market_data::BingxMarketData>,
     mongo: MongoConnections,
     redis: RedisConnections,
@@ -75,7 +75,7 @@ impl Infrastructure {
                 Some(Arc::new(crate::telegram::TelegramHandler)),
             ));
         }
-        if config.client_trade_worker_enabled {
+        {
             let mut rabbit = config.rabbitmq.clone();
             rabbit.input_queue = crate::contracts::rabbitmq::BINGX_FUTURES_QUEUE;
             rabbit.prefetch = config.client_trade_worker_prefetch;
@@ -152,12 +152,10 @@ impl Infrastructure {
             static_low_balance_fallback_ratio_futures: config
                 .static_low_balance_fallback_ratio_futures,
             telegram_sender,
-            job_publication: config.client_trade_job_fanout_enabled.then(|| {
-                crate::signals::publication::JobPublication::new(
-                    config.rabbitmq.retry_max_attempts.get(),
-                    config.rabbitmq.retry_delay,
-                )
-            }),
+            job_publication: crate::signals::publication::JobPublication::new(
+                config.rabbitmq.retry_max_attempts.get(),
+                config.rabbitmq.retry_delay,
+            ),
             market: Arc::new(market),
             mongo: MongoConnections::new(config.mongo, config.runtime.operation_timeout),
             redis,
@@ -455,7 +453,7 @@ impl Drop for ConsumerRuntime {
 mod tests {
     use super::*;
 
-    fn config(intake: bool, worker: bool) -> AppConfig {
+    fn config(intake: bool) -> AppConfig {
         let mut config = AppConfig::from_lookup(|key| {
             Some(
                 match key {
@@ -473,20 +471,13 @@ mod tests {
         })
         .unwrap();
         config.telegram_intake_enabled = intake;
-        config.client_trade_worker_enabled = worker;
         config
     }
 
     #[tokio::test]
-    async fn application_selects_independent_consumer_roles() {
-        for (intake, worker, expected) in [
-            (false, false, vec![]),
-            (true, false, vec![7]),
-            (false, true, vec![3]),
-            (true, true, vec![7, 3]),
-        ] {
-            let mut infrastructure =
-                Infrastructure::for_application(config(intake, worker)).unwrap();
+    async fn application_always_registers_worker_with_optional_intake() {
+        for (intake, expected) in [(false, vec![3]), (true, vec![7, 3])] {
+            let mut infrastructure = Infrastructure::for_application(config(intake)).unwrap();
             assert_eq!(
                 infrastructure
                     .consumers
@@ -516,7 +507,7 @@ mod tests {
 
     #[tokio::test]
     async fn explicit_constructor_keeps_one_configured_role() {
-        let infrastructure = Infrastructure::new(config(true, true), None).unwrap();
+        let infrastructure = Infrastructure::new(config(true), None).unwrap();
         assert_eq!(infrastructure.consumers.len(), 1);
         assert_eq!(infrastructure.consumers[0].concurrency, 7);
         assert!(infrastructure.consumers[0].handler.is_none());
@@ -524,7 +515,7 @@ mod tests {
 
     #[tokio::test]
     async fn dropping_infrastructure_cancels_every_worker_role() {
-        let infrastructure = Infrastructure::for_application(config(true, true)).unwrap();
+        let infrastructure = Infrastructure::for_application(config(true)).unwrap();
         let cancellations: Vec<_> = infrastructure
             .consumers
             .iter()
@@ -536,7 +527,7 @@ mod tests {
 
     #[tokio::test]
     async fn drain_joins_every_role_before_releasing_worker_handles() {
-        let mut infrastructure = Infrastructure::for_application(config(true, true)).unwrap();
+        let mut infrastructure = Infrastructure::for_application(config(true)).unwrap();
         let completed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         for consumer in &mut infrastructure.consumers {
             let cancelled = consumer.workers_abort.clone();

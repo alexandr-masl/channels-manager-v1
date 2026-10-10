@@ -9,10 +9,14 @@ Matches the original TypeScript service:
 | Pod selector | `io.kompose.service: satoshi-channel-updates-manager` |
 | Optional KEDA ScaledObject | `satoshi-channel-updates-manager-rabbitmq` |
 
-**Current scope:** Rust consumes, logs and acknowledges `tg_bot_channel_update`.
-It does not publish trades or process the original command/client-job queues yet.
-Replacing TypeScript now stops those workflows and consumes incoming signals
-without executing trades. Use an isolated environment until migration is ready.
+**Current scope:** the full BingX Futures pipeline: Telegram intake → client jobs →
+validated trade construction → confirmed Trading Station publication. The deployment
+and Compose files enable Telegram intake; client-job publication and the worker
+are always active. Commands, other exchanges
+and Spot remain outside this implementation; retain their existing owners.
+
+See [verification and cutover](verification-and-rollout.md) for worker-only migration,
+queue ownership, acceptance checks and rollback. These files do not apply themselves.
 
 ## Local Compose
 
@@ -48,7 +52,10 @@ Compose provides RabbitMQ, Redis and three MongoDB instances. It supplies its ow
 connection settings, without reading `.env.local`. RabbitMQ binds to localhost
 ports 5672 and 15672; stop any conflicting local broker first. Mongo volumes
 survive `down`. Startup retries handle dependency startup order. The existing
-Telegram example can publish through localhost:5672.
+Telegram example can publish through localhost:5672. Populate channel/account/user
+fixtures before testing intake. Compose does not start Trading Station: inspect the
+queued final envelope locally. The optional Telegram sender stays disabled unless
+you explicitly supply `SATOSHI_TG_TOKEN`.
 
 ## Build and replace
 
@@ -57,7 +64,8 @@ The manifests preserve dependency DNS names, database names, resource limits and
 `regcred`. They contain the original guest RabbitMQ connection; adapt credentials
 to the actual environment if it differs. No HTTP probes are configured because
 health endpoints belong to a separate issue. Rollout success alone does not prove
-dependency readiness; check logs for `Listening for messages on tg_bot_channel_update.`
+dependency readiness; check enabled queue listener logs and `Client trade published`
+from controlled work. An absent publish log alone is not proof of failure.
 
 Before overwriting `latest`, record the running TypeScript image digest for rollback:
 
@@ -66,24 +74,28 @@ kubectl get pods -l io.kompose.service=satoshi-channel-updates-manager \
   -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.containerStatuses[*].imageID}{"\n"}{end}'
 ```
 
-After confirming that replacing the service is appropriate:
+After completing the ownership/drain steps in the cutover checklist:
 
 ```sh
 docker buildx build --platform linux/amd64 \
   -t kolobobolobo/satoshi-channels-updates:latest --push .
-kubectl apply -f kubernetes/deployment.yaml
-# Only if the original service uses KEDA:
+# Only if the original service uses KEDA; cap scaling before replacing the app:
 kubectl apply -f kubernetes/rabbitmq-scaledobject.yaml
+kubectl apply -f kubernetes/deployment.yaml
 kubectl rollout status deployment/satoshi-channel-updates-manager
 kubectl logs -f deployment/satoshi-channel-updates-manager
 ```
 
-`Recreate` stops the old Deployment pods before starting Rust, avoiding a mixed
-TypeScript/Rust rollout. Check for consumers from other Deployments separately.
-The KEDA file retains only the queue this binary consumes; leaving the original
-six triggers would scale Rust for queues it cannot process. The worker-queue env
-setting remains a configuration contract; this binary explicitly selects raw
-Telegram intake. No Service is needed because the app exposes no inbound port.
+`Recreate` stops old pods of this Deployment before starting Rust. Other Deployments
+and external consumers must be checked separately. Manifests start one replica;
+optional KEDA also caps the initial canary at one and watches both enabled queues.
+Increase its maximum only after your canary checks. For worker-only mode, remove the
+`tg_bot_channel_update` trigger and set `TELEGRAM_INTAKE_ENABLED=false` in the Deployment.
+
+If TypeScript currently uses this same Deployment name, replacing it also stops its
+intake and unrelated workers. Retain those roles in a separate workload before a
+worker-only replacement. Never leave both implementations consuming the same queue.
+No Service is needed because this app exposes no inbound port.
 
 For later pushes to the same tag, apply alone may not change the pod template:
 

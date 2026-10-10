@@ -79,7 +79,8 @@ impl DeliveryHandler for TelegramHandler {
                                             ),
                                         }
                                     }
-                                    if let Some(publication) = &services.job_publication {
+                                    {
+                                        let publication = &services.job_publication;
                                         match publication
                                             .publish(&batch.jobs, &services.publisher)
                                             .await
@@ -172,7 +173,7 @@ impl DeliveryHandler for TelegramHandler {
                 IntakeOutcome::Skipped(reason) => println!("Telegram intake skipped: {reason:?}"),
                 IntakeOutcome::Rejected(reason) => println!("Telegram intake rejected: {reason:?}"),
             }
-            // Enabled publication reaches here only after all jobs are confirmed.
+            // Accepted signals reach here only after all client jobs are confirmed.
             delivery.ack().await
         })
     }

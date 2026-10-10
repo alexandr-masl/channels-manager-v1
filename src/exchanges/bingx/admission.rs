@@ -31,7 +31,6 @@ pub enum ModeDecision {
 }
 struct ModeEvidence {
     decision: ModeDecision,
-    owners: Vec<(String, bool, u64)>,
 }
 pub fn evaluate_position_mode(
     account: &AccountEvidence,
@@ -154,7 +153,6 @@ fn mode_evidence(
     let mut ids = HashSet::new();
     let mut blocker = false;
     let mut same_blocker = false;
-    let mut owners = Vec::new();
     for row in managed {
         let fail = || reject("incompleteManagedEvidence");
         let identity = id(&row["id"])
@@ -196,27 +194,6 @@ fn mode_evidence(
             blocker = true;
             same_blocker |= s == requested_symbol;
         }
-        let direction = row["is_long"].as_bool();
-        let stored = if let Some(s) = row["tradeLeverage"].as_str() {
-            let s = s.trim();
-            let s = s
-                .strip_suffix('x')
-                .or_else(|| s.strip_suffix('X'))
-                .unwrap_or(s);
-            if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
-                None
-            } else {
-                positive_integer(&Value::String(s.to_owned()))
-            }
-        } else {
-            positive_integer(&row["tradeLeverage"])
-        };
-        // The original snapshot keeps incomplete retained rows as mode blockers,
-        // but records absent/invalid direction or leverage as diagnostics only.
-        // Leverage admission receives only owners with both canonical fields.
-        if let (Some(direction), Some(stored)) = (direction, stored) {
-            owners.push((s, direction, stored));
-        }
     }
     if !hedge && same_blocker {
         return Err(reject("migrationRequired"));
@@ -228,37 +205,26 @@ fn mode_evidence(
     } else {
         ModeDecision::LegacyOneWay
     };
-    Ok(ModeEvidence { decision, owners })
+    Ok(ModeEvidence { decision })
 }
-pub fn evaluate_admission(
+pub fn plan_admission(
     account: &AccountEvidence,
     managed: &[Value],
     exchange_client_id: &str,
     requested_symbol: &str,
     is_long: bool,
     leverage: u32,
-) -> Result<AdmittedAccount, AdmissionRejection> {
+) -> Result<(AdmittedAccount, Option<&'static str>), AdmissionRejection> {
     if leverage == 0 {
         return Err(reject("invalidAdmissionTarget"));
     }
-    let ModeEvidence { decision, owners } =
+    let ModeEvidence { decision } =
         mode_evidence(account, managed, exchange_client_id, requested_symbol)?;
     let hedge = match decision {
         ModeDecision::Hedge => true,
         ModeDecision::LegacyOneWay => false,
         ModeDecision::MigrateToHedge => return Err(reject("migrationRequired")),
     };
-    let relevant: Vec<_> = owners
-        .iter()
-        .filter(|(s, direction, _)| s == requested_symbol && (!hedge || *direction == is_long))
-        .collect();
-    let owned = !relevant.is_empty();
-    if relevant
-        .iter()
-        .any(|(_, _, stored)| *stored != leverage as u64)
-    {
-        return Err(reject("leverageConflict"));
-    }
     let fields = [
         "longLeverage",
         "shortLeverage",
@@ -274,12 +240,35 @@ pub fn evaluate_admission(
     if ((!hedge || is_long) && target > max_long) || ((!hedge || !is_long) && target > max_short) {
         return Err(reject("leverageLimitExceeded"));
     }
-    if ((!hedge || is_long) && target != long) || ((!hedge || !is_long) && target != short) {
-        return Err(reject(if owned {
-            "ownedLeverageMismatch"
-        } else {
-            "leverageChangeRequired"
-        }));
+    let side = if !hedge {
+        "BOTH"
+    } else if is_long {
+        "LONG"
+    } else {
+        "SHORT"
+    };
+    let change =
+        ((!hedge || is_long) && target != long) || ((!hedge || !is_long) && target != short);
+    if change {
+        let affects = |row: &Value| {
+            symbol(&row["symbol"]).as_deref() == Some(requested_symbol)
+                && (side == "BOTH"
+                    || text(&row["positionSide"]) == side
+                    || text(&row["positionSide"]) == "BOTH")
+        };
+        let positions = account.positions.as_array().expect("validated positions");
+        let orders = account
+            .orders
+            .as_array()
+            .or_else(|| account.orders["orders"].as_array())
+            .expect("validated orders");
+        if positions
+            .iter()
+            .any(|r| affects(r) && number(&r["positionAmt"]) != Some(0.0))
+            || orders.iter().any(affects)
+        {
+            return Err(reject("leverageChangeBlocked"));
+        }
     }
     let balances = account
         .balance
@@ -297,14 +286,40 @@ pub fn evaluate_admission(
     if available <= 0.0 {
         return Err(reject("insufficientBalance"));
     }
-    Ok(AdmittedAccount {
-        position_mode: if hedge { "HEDGE" } else { "ONEWAY" },
-        position_configuration: if hedge {
-            ExecutionRoute::Hedge
-        } else {
-            ExecutionRoute::OneWay
+    Ok((
+        AdmittedAccount {
+            position_mode: if hedge { "HEDGE" } else { "ONEWAY" },
+            position_configuration: if hedge {
+                ExecutionRoute::Hedge
+            } else {
+                ExecutionRoute::OneWay
+            },
+            available_balance: available,
+            available_balance_raw: raw,
         },
-        available_balance: available,
-        available_balance_raw: raw,
-    })
+        change.then_some(side),
+    ))
+}
+
+/// Pure admission requires already configured leverage; the coordinator executes changes.
+pub fn evaluate_admission(
+    account: &AccountEvidence,
+    managed: &[Value],
+    exchange_client_id: &str,
+    requested_symbol: &str,
+    is_long: bool,
+    leverage: u32,
+) -> Result<AdmittedAccount, AdmissionRejection> {
+    let (admitted, change) = plan_admission(
+        account,
+        managed,
+        exchange_client_id,
+        requested_symbol,
+        is_long,
+        leverage,
+    )?;
+    if change.is_some() {
+        return Err(reject("leverageChangeRequired"));
+    }
+    Ok(admitted)
 }

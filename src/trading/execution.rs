@@ -142,6 +142,9 @@ impl<'a, D: AdmissionDependencies + ?Sized> ClientTradeWorker<'a, D> {
             Ok(Err(AdmissionFailure::Rejected(code))) => {
                 WorkerOutcome::Rejected(WorkerRejection::Admission(code))
             }
+            Err(_) if attempt.leverage_started() => {
+                WorkerOutcome::Rejected(WorkerRejection::Admission("leverageChangeTimeout"))
+            }
             Err(_) if attempt.switch_started() => {
                 WorkerOutcome::Rejected(WorkerRejection::Admission("modeSwitchTimeout"))
             }

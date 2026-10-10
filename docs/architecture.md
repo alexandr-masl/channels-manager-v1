@@ -4,13 +4,13 @@
 
 Keep this document current as implementation decisions change. The TypeScript
 `satoshi-channel-updates-manager` remains the behavioral source of truth.
-Implemented through signal preparation and optional job publication: Telegram intake validates structure and source time,
+Implemented through signal preparation and job publication: Telegram intake validates structure and source time,
 authorizes the channel, parses USDT Futures signals, selects eligible BingX accounts
 and loads user settings, per-user open trades and shared BingX market data.
-It prepares client jobs and logs summaries. With `CLIENT_TRADE_JOB_FANOUT_ENABLED=true`,
-it confirms publication before acknowledging intake; the default remains preparation-only.
+It prepares client jobs and confirms publication before acknowledging intake.
+The BingX Futures worker always runs; Telegram intake can be disabled independently.
 An optional outbound Telegram sender replies `created ✅` after preparation when
-`SATOSHI_TG_TOKEN` is configured. The optional client worker validates settings and
+`SATOSHI_TG_TOKEN` is configured. The client worker validates settings and
 BingX admission with automatic eligible Hedge switching, constructs trades and
 confirms publication to Trading Station before acknowledging client jobs.
 The workflows below extend the initial client-job migration to include signal intake.
@@ -212,7 +212,7 @@ The handler logs only parsed signal data, IDs, eligible counts and static reason
 Contexts and clients have no Debug/Serialize implementation because they contain
 credentials. Mongo errors use the existing bounded retry/dead-letter policy;
 lookup failures never become empty results. Skips/rejections are acknowledged;
-ready contexts continue through preparation and optional confirmed publication.
+ready contexts continue through preparation and confirmed publication.
 
 Local signal tests now require an existing channel, a connected BingX account and
 an active auto-trading subscription in the configured databases. Without those,

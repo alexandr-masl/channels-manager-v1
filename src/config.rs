@@ -45,11 +45,9 @@ impl std::error::Error for ConfigError {}
 pub struct AppConfig {
     pub static_low_balance_fallback_ratio_futures: f64,
     pub telegram_intake_enabled: bool,
-    pub client_trade_worker_enabled: bool,
     pub client_trade_worker_prefetch: NonZeroU16,
     pub telegram_bot_token: Option<ConnectionString>,
     pub telegram_api_base_url: String,
-    pub client_trade_job_fanout_enabled: bool,
     pub bingx_public_api_base_url: String,
     pub rabbitmq: RabbitMqConfig,
     pub redis: RedisConfig,
@@ -299,12 +297,9 @@ impl AppConfig {
         Ok(Self {
             static_low_balance_fallback_ratio_futures,
             telegram_intake_enabled: reader.boolean("TELEGRAM_INTAKE_ENABLED", true)?,
-            client_trade_worker_enabled: reader.boolean("CLIENT_TRADE_WORKER_ENABLED", false)?,
             client_trade_worker_prefetch: reader.port("CLIENT_TRADE_WORKER_PREFETCH", 2)?,
             telegram_bot_token,
             telegram_api_base_url,
-            client_trade_job_fanout_enabled: reader
-                .boolean("CLIENT_TRADE_JOB_FANOUT_ENABLED", false)?,
             bingx_public_api_base_url,
             rabbitmq: RabbitMqConfig {
                 uri,

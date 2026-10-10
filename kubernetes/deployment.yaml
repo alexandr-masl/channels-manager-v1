@@ -5,7 +5,7 @@ metadata:
   labels:
     io.kompose.service: satoshi-channel-updates-manager
 spec:
-  replicas: 3
+  replicas: 1
   # Stop the old consumer pods before starting the replacement implementation.
   strategy:
     type: Recreate
@@ -38,6 +38,14 @@ spec:
           readinessProbe: null
           livenessProbe: null
           env:
+            # For worker-only cutover, disable Telegram intake and retain it
+            # in another workload. Client-job publication/worker are always active.
+            - name: TELEGRAM_INTAKE_ENABLED
+              value: "true"
+            - name: CLIENT_TRADE_WORKER_PREFETCH
+              value: "2"
+            - name: STATIC_LOW_BALANCE_FALLBACK_RATIO_FUTURES
+              value: "0.95"
             - name: MONGO_PATH
               value: mongodb://mongo-tg-client/MyBot
             - name: TRADE_STATION_MONGO_PATH

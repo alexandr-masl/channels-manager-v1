@@ -217,3 +217,31 @@ async fn expiry_after_switch_started_stops_job_without_retry() {
         .await;
     assert!(matches!(result, WorkerOutcome::Expired));
 }
+
+struct LeverageDependencies;
+impl AdmissionDependencies for LeverageDependencies {
+    fn check<'a>(
+        &'a self,
+        _: &'a ValidatedJob<'a>,
+        attempt: &'a AdmissionAttempt,
+    ) -> BoxFuture<'a, Result<AdmittedAccount, AdmissionFailure>> {
+        Box::pin(async move {
+            attempt.begin_leverage().unwrap();
+            std::future::pending().await
+        })
+    }
+}
+#[tokio::test(start_paused = true)]
+async fn worker_timeout_after_leverage_started_rejects_without_retry() {
+    let result = ClientTradeWorker::new(&LeverageDependencies, Duration::from_millis(50))
+        .prepare(&body(), || 1)
+        .await;
+    assert!(matches!(
+        result,
+        WorkerOutcome::Rejected(
+            channels_manager_v1::trading::execution::WorkerRejection::Admission(
+                "leverageChangeTimeout"
+            )
+        )
+    ));
+}
