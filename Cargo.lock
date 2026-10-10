@@ -393,6 +393,7 @@ dependencies = [
  "async-compat",
  "dotenvy",
  "futures-util",
+ "hmac 0.12.1",
  "lapin",
  "mongodb",
  "rand 0.9.5",

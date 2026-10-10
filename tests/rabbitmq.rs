@@ -1466,22 +1466,28 @@ async fn startup_outage_preserves_backlog_until_required_dependency_recovers() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "starts isolated RabbitMQ, MongoDB and Redis; requires loopback access"]
 async fn binary_logs_raw_telegram_signal_and_acknowledges() {
-    binary_signal(false, false).await;
+    binary_signal(false, false, false).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "starts isolated RabbitMQ, MongoDB and Redis; requires loopback access"]
 async fn binary_publishes_client_job_before_acknowledging_telegram() {
-    binary_signal(true, false).await;
+    binary_signal(true, false, false).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "starts isolated services; requires loopback access"]
 async fn binary_telegram_notification_failure_does_not_block_jobs() {
-    binary_signal(true, true).await;
+    binary_signal(true, true, false).await;
 }
 
-async fn binary_signal(publish: bool, notification_error: bool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "starts isolated services; requires loopback access"]
+async fn binary_dual_consumers_prepare_publish_and_admit_without_creating_trades() {
+    binary_signal(true, false, true).await;
+}
+
+async fn binary_signal(publish: bool, notification_error: bool, worker: bool) {
     use std::io::{BufRead, BufReader};
     let broker = Broker::start().await;
     let stores = Stores::start(&broker.directory).await;
@@ -1490,7 +1496,7 @@ async fn binary_signal(publish: bool, notification_error: bool) {
         .unwrap();
     let bot = mongo.database("bot");
     bot.collection::<mongodb::bson::Document>("mcr_channels")
-        .insert_one(mongodb::bson::doc! {"id":-1001596367704_i64})
+        .insert_one(mongodb::bson::doc! {"id":-1001596367704_i64,"default_quantity":0.1,"default_buy_targets":[{"fraction":1}],"default_sell_targets":[{"fraction":1}],"strategy":"basic"})
         .await
         .unwrap();
     bot.collection::<mongodb::bson::Document>("tradingprofiles").insert_one(mongodb::bson::doc! {
@@ -1504,20 +1510,41 @@ async fn binary_signal(publish: bool, notification_error: bool) {
     let quote_endpoint = format!("http://{}", quote_listener.local_addr().unwrap());
     let quotes = tokio::spawn(async move {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        for path in [
-            "/openApi/swap/v2/quote/contracts",
-            "/openApi/swap/v1/ticker/price",
-        ] {
+        for _ in 0..if worker { 8 } else { 2 } {
             let (mut socket, _) = quote_listener.accept().await.unwrap();
             let mut bytes = vec![0; 8192];
             let count = socket.read(&mut bytes).await.unwrap();
             let request = String::from_utf8_lossy(&bytes[..count]);
-            assert!(request.starts_with(&format!("GET {path}?symbol=ADA-USDT ")));
-            assert!(!request.contains("must-not-log"));
-            let data = if path.ends_with("contracts") {
-                json!([{"symbol":"ADA-USDT","status":1,"pricePrecision":4,"quantityPrecision":1,"tradeMinUSDT":"5"}])
-            } else {
-                json!({"symbol":"ADA-USDT","price":"0.2570"})
+            let switching = request.starts_with("POST ");
+            assert!(switching || request.starts_with("GET "));
+            if switching {
+                assert!(
+                    request.contains("/openApi/swap/v1/positionSide/dual?dualSidePosition=true&")
+                );
+            }
+            let route = request
+                .split_whitespace()
+                .nth(1)
+                .unwrap()
+                .split('?')
+                .next()
+                .unwrap();
+            let data = match route {
+                "/openApi/swap/v2/quote/contracts" => {
+                    json!([{"symbol":"ADA-USDT","status":1,"pricePrecision":4,"quantityPrecision":1,"tradeMinUSDT":"5"}])
+                }
+                "/openApi/swap/v1/ticker/price" => json!({"symbol":"ADA-USDT","price":"0.2570"}),
+                "/openApi/swap/v1/positionSide/dual" if switching => json!({}),
+                "/openApi/swap/v1/positionSide/dual" => json!({"dualSidePosition":false}),
+                "/openApi/swap/v2/user/positions" => json!([]),
+                "/openApi/swap/v2/trade/openOrders" => json!({"orders":[]}),
+                "/openApi/swap/v3/user/balance" => {
+                    json!([{"asset":"USDT","availableMargin":"100"}])
+                }
+                "/openApi/swap/v2/trade/leverage" => {
+                    json!({"longLeverage":3,"shortLeverage":3,"maxLongLeverage":50,"maxShortLeverage":50})
+                }
+                _ => panic!("unexpected read route"),
             };
             let body = json!({"code":0,"data":data}).to_string();
             socket
@@ -1593,6 +1620,7 @@ async fn binary_signal(publish: bool, notification_error: bool) {
             .current_dir(&broker.directory)
             .env_clear()
             .envs(telegram_env)
+            .env("CLIENT_TRADE_WORKER_ENABLED", worker.to_string())
             .env("CLIENT_TRADE_JOB_FANOUT_ENABLED", publish.to_string())
             .env("BINGX_PUBLIC_API_BASE_URL", quote_endpoint)
             .env("RABBIT_MQ", broker.uri())
@@ -1731,30 +1759,53 @@ async fn binary_signal(publish: bool, notification_error: bool) {
             .await
             .unwrap()
             .unwrap();
-        let published = timeout(Duration::from_secs(5), lines.recv())
-            .await
-            .unwrap()
-            .unwrap();
+        let (published, admitted) = timeout(Duration::from_secs(5), async {
+            let mut published = None;
+            let mut admitted = None;
+            loop {
+                let log = lines.recv().await.unwrap();
+                assert!(!log.contains("must-not-log"));
+                if log.starts_with("Signal published:") {
+                    published = Some(log.clone());
+                }
+                if log.starts_with("Client job admitted:") {
+                    admitted = Some(log);
+                }
+                if (!worker || admitted.is_some())
+                    && let Some(published) = published.take()
+                {
+                    break (published, admitted);
+                }
+            }
+        })
+        .await
+        .unwrap();
+        if let Some(admitted) = admitted {
+            assert!(admitted.contains("positionConfiguration=ORDER_LEDGER_V1"));
+            assert!(admitted.contains("execution_enabled=false"));
+        }
         assert!(published.starts_with("Signal published: "), "{published}");
         let report: serde_json::Value =
             serde_json::from_str(published.strip_prefix("Signal published: ").unwrap()).unwrap();
         assert_eq!(report["published_jobs"], 1);
         assert!(!published.contains("must-not-log"));
-        let message = channel
-            .basic_get(BINGX_FUTURES_QUEUE.into(), BasicGetOptions::default())
-            .await
-            .unwrap()
-            .expect("confirmed job queued");
-        let job: serde_json::Value = serde_json::from_slice(&message.data).unwrap();
-        assert_eq!(job["symbol"], "ADAUSDT");
-        assert_eq!(job["client"]["clientId"], "integration-account");
-        assert_eq!(job["tradeExpiresAt"], summary["expires_at_ms"]);
-        assert_eq!(message.properties.delivery_mode(), &Some(1));
-        assert_eq!(
-            message.properties.content_type().as_ref().unwrap().as_str(),
-            "application/json"
-        );
-        message.ack(BasicAckOptions::default()).await.unwrap();
+        if !worker {
+            let message = channel
+                .basic_get(BINGX_FUTURES_QUEUE.into(), BasicGetOptions::default())
+                .await
+                .unwrap()
+                .expect("confirmed job queued");
+            let job: serde_json::Value = serde_json::from_slice(&message.data).unwrap();
+            assert_eq!(job["symbol"], "ADAUSDT");
+            assert_eq!(job["client"]["clientId"], "integration-account");
+            assert_eq!(job["tradeExpiresAt"], summary["expires_at_ms"]);
+            assert_eq!(message.properties.delivery_mode(), &Some(1));
+            assert_eq!(
+                message.properties.content_type().as_ref().unwrap().as_str(),
+                "application/json"
+            );
+            message.ack(BasicAckOptions::default()).await.unwrap();
+        }
     }
     timeout(Duration::from_secs(3), quotes)
         .await
@@ -1934,4 +1985,158 @@ async fn client_job_route_confirms_expiry_and_partial_failure_retry_source() {
         &lapin::types::AMQPValue::LongString(TELEGRAM_CHANNEL_QUEUE.into())
     );
     retry.ack().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "starts isolated RabbitMQ, MongoDB, Redis and HTTP; requires loopback access"]
+async fn dual_consumers_retry_to_own_queue_and_recover_without_duplicate_consumers() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let broker = Broker::start().await;
+    let stores = Stores::start(&broker.directory).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut config = stores.config(&broker);
+    config.bingx_public_api_base_url = format!("http://{}", listener.local_addr().unwrap());
+    config.telegram_intake_enabled = true;
+    config.client_trade_worker_enabled = true;
+    config.rabbitmq.retry_max_attempts = std::num::NonZeroU32::new(1).unwrap();
+    config.rabbitmq.retry_delay = Duration::from_millis(50);
+    let requests = Arc::new(AtomicUsize::new(0));
+    let counted = requests.clone();
+    let http = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 4096];
+            let _ = socket.read(&mut bytes).await;
+            counted.fetch_add(1, Ordering::SeqCst);
+            let _ = socket
+                .write_all(
+                    b"HTTP/1.1 503 Unavailable\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                )
+                .await;
+        }
+    });
+    let runtime = config.runtime.clone();
+    let lifecycle =
+        Lifecycle::new(Infrastructure::for_application(config).unwrap(), runtime).unwrap();
+    let mut phases = lifecycle.subscribe();
+    let stop = CancellationToken::new();
+    let task = tokio::spawn(lifecycle.run(stop.clone()));
+    running(&mut phases).await;
+    let admin = Connection::connect(&broker.uri(), ConnectionProperties::default())
+        .await
+        .unwrap();
+    let channel = admin.create_channel().await.unwrap();
+    channel
+        .confirm_select(ConfirmSelectOptions::default())
+        .await
+        .unwrap();
+    for queue in [TELEGRAM_CHANNEL_QUEUE, BINGX_FUTURES_QUEUE] {
+        let state = channel
+            .queue_declare(
+                queue.into(),
+                QueueDeclareOptions {
+                    passive: true,
+                    ..Default::default()
+                },
+                FieldTable::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(state.consumer_count(), 1);
+    }
+    let body = include_bytes!("fixtures/admission-job.json");
+    seed(&channel, body).await;
+    let dead = timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(message) = channel
+                .basic_get(DEAD_LETTER_QUEUE.into(), BasicGetOptions::default())
+                .await
+                .unwrap()
+            {
+                break message;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let diagnostic: serde_json::Value = serde_json::from_slice(&dead.data).unwrap();
+    assert_eq!(diagnostic["originalQueue"], BINGX_FUTURES_QUEUE);
+    assert_eq!(
+        diagnostic["payload"],
+        serde_json::from_slice::<serde_json::Value>(body).unwrap()
+    );
+    assert_eq!(diagnostic["attempt"], 2);
+    dead.ack(BasicAckOptions::default()).await.unwrap();
+    assert!(requests.load(Ordering::SeqCst) >= 2);
+    let calls = requests.load(Ordering::SeqCst);
+    // Invalid and expired jobs settle without touching the exchange.
+    seed(&channel, b"not a job").await;
+    let mut expired: serde_json::Value = serde_json::from_slice(body).unwrap();
+    expired["tradeExpiresAt"] = json!(1);
+    seed(&channel, &serde_json::to_vec(&expired).unwrap()).await;
+    // Deleting either role's queue forces coordinated recovery of both roles.
+    for queue in [TELEGRAM_CHANNEL_QUEUE, BINGX_FUTURES_QUEUE] {
+        channel
+            .queue_delete(queue.into(), QueueDeleteOptions::default())
+            .await
+            .unwrap();
+        timeout(Duration::from_secs(10), async {
+            loop {
+                phases.changed().await.unwrap();
+                if *phases.borrow_and_update() != Phase::Running {
+                    break;
+                }
+            }
+            running(&mut phases).await;
+        })
+        .await
+        .unwrap();
+        for queue in [TELEGRAM_CHANNEL_QUEUE, BINGX_FUTURES_QUEUE] {
+            let state = channel
+                .queue_declare(
+                    queue.into(),
+                    QueueDeclareOptions {
+                        passive: true,
+                        ..Default::default()
+                    },
+                    FieldTable::default(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                state.consumer_count(),
+                1,
+                "duplicate role consumer after recovery"
+            );
+        }
+    }
+    stop.cancel();
+    timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(requests.load(Ordering::SeqCst), calls);
+    for queue in [
+        TELEGRAM_CHANNEL_QUEUE,
+        BINGX_FUTURES_QUEUE,
+        DEFAULT_TRADE_QUEUE,
+    ] {
+        let state = channel
+            .queue_declare(
+                queue.into(),
+                QueueDeclareOptions {
+                    passive: true,
+                    ..Default::default()
+                },
+                FieldTable::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(state.consumer_count(), 0);
+        assert_eq!(state.message_count(), 0);
+    }
+    http.abort();
+    let _ = http.await;
 }

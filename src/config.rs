@@ -43,6 +43,9 @@ impl std::error::Error for ConfigError {}
 
 #[derive(Debug)]
 pub struct AppConfig {
+    pub telegram_intake_enabled: bool,
+    pub client_trade_worker_enabled: bool,
+    pub client_trade_worker_prefetch: NonZeroU16,
     pub telegram_bot_token: Option<ConnectionString>,
     pub telegram_api_base_url: String,
     pub client_trade_job_fanout_enabled: bool,
@@ -285,6 +288,9 @@ impl AppConfig {
         };
         runtime.validate()?;
         Ok(Self {
+            telegram_intake_enabled: reader.boolean("TELEGRAM_INTAKE_ENABLED", true)?,
+            client_trade_worker_enabled: reader.boolean("CLIENT_TRADE_WORKER_ENABLED", false)?,
+            client_trade_worker_prefetch: reader.port("CLIENT_TRADE_WORKER_PREFETCH", 2)?,
             telegram_bot_token,
             telegram_api_base_url,
             client_trade_job_fanout_enabled: reader

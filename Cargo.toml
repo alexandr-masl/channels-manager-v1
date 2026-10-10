@@ -13,6 +13,7 @@ codegen-units = 1
 panic = "unwind"
 
 [dependencies]
+hmac = "0.12"
 async-compat = "0.2.6"
 dotenvy = "0.15.7"
 futures-util = "0.3.34"

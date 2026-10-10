@@ -10,7 +10,8 @@ and loads user settings, per-user open trades and shared BingX market data.
 It prepares client jobs and logs summaries. With `CLIENT_TRADE_JOB_FANOUT_ENABLED=true`,
 it confirms publication before acknowledging intake; the default remains preparation-only.
 An optional outbound Telegram sender replies `created ✅` after preparation when
-`SATOSHI_TG_TOKEN` is configured. Account execution remains planned.
+`SATOSHI_TG_TOKEN` is configured. The optional client worker validates settings and
+BingX admission with automatic eligible Hedge switching; trade construction/publication remains planned.
 The workflows below extend the initial client-job migration to include signal intake.
 
 ## Workflows
@@ -159,7 +160,7 @@ Decimal strings and leverage notation retain TypeScript wire compatibility.
 `TelegramHandler` logs `Signal parsed: ... result=<JSON>` and the context summary
 when eligible accounts exist. Other outcomes log a static skip/rejection reason.
 Signal preparation and optional confirmed job fan-out now follow context loading;
-account execution remains planned.
+account admission with automatic eligible Hedge switching is implemented. Trade construction remains planned.
 
 ### Compatibility trace (2026-10-04)
 
@@ -167,7 +168,7 @@ Source: TypeScript `src/handlers/trading-signal-reader.ts`, its
 `test/trading-signal-reader.test.js`, and `src/trade-processing/position-size.ts`.
 The SOL `71-72` / `POSITION SIZE 0.5%` regression matches the original parser's
 JSON output. The original sizing resolver gives signal `position` precedence
-over channel settings; applying that override belongs to the settings slice.
+over channel settings; the worker applies that override during settings resolution.
 
 Remaining differences to migrate explicitly:
 
@@ -199,7 +200,7 @@ seam; `MongoRepositories` supplies the real adapter. `main.rs` stays wiring only
    `auto_trading: true` and `valid_till` strictly later than the workflow clock.
 5. Load `user_configs` for eligible users. Preserve the original config and its
    matching `private_channels` entry, including `own_settings`; effective trading
-   settings are resolved in the later execution slice.
+   settings are resolved by the client-job admission worker.
 6. Return `ChannelContext` with the original message identity/time, parsed signal,
    channel settings and eligible clients. Missing optional user settings are allowed.
 

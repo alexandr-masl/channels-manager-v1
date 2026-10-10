@@ -10,3 +10,5 @@ pub mod telegram;
 pub mod signals;
 
 pub mod exchanges;
+
+pub mod trading;

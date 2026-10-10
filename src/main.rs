@@ -1,6 +1,5 @@
 use channels_manager_v1::{
     config::AppConfig,
-    contracts::rabbitmq::TELEGRAM_CHANNEL_QUEUE,
     infrastructure::Infrastructure,
     runtime::{Lifecycle, run_until_signal},
 };
@@ -41,8 +40,12 @@ async fn main() -> ExitCode {
     } else {
         "preparation only; client-job publication disabled"
     };
+    println!(
+        "Consumer roles: Telegram intake={}, BingX admission={}",
+        config.telegram_intake_enabled, config.client_trade_worker_enabled
+    );
     let runtime = config.runtime.clone();
-    let adapter = match Infrastructure::for_telegram_intake(config) {
+    let adapter = match Infrastructure::for_application(config) {
         Ok(adapter) => adapter,
         Err(error) => {
             eprintln!("Infrastructure error: {}", error.code);
@@ -56,9 +59,7 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    println!(
-        "Starting infrastructure; incoming {TELEGRAM_CHANNEL_QUEUE} messages: {publication_mode}."
-    );
+    println!("Starting infrastructure; Telegram intake mode: {publication_mode}.");
     match run_until_signal(lifecycle).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

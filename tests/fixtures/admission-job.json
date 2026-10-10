@@ -1,0 +1,12 @@
+{
+  "jobType":"create_trade", "version":1, "channelID":-100, "messageId":7,
+  "tradeExpiresAt":4102444800000,
+  "signalData":{"symbol":"BTCUSDT","exchange_client":"_futures","is_long":true,"leverage":"10x","buy_targets":["62000"],"sell_targets":["63000"],"stop_loss":"61000"},
+  "channelSettings":{"default_quantity":0.1,"default_buy_targets":[{"fraction":1}],"default_sell_targets":[{"fraction":1}],"strategy":"basic"},
+  "client":{"clientId":"account-1","provider":"BingX","chatId":42,"key":"fixture-key","keySecret":"fixture-secret"},
+  "marketData":{"bingXFutures":{"currPrice":"62000","symbolInfo":{"symbol":"BTC-USDT","status":1,"tickSize":"0.01","lotSize":"0.001","minQty":"0.001","minNotional":0}}},
+  "openedTrades":[],
+  "idempotencyKey":"auto-trade:-100:7:42:account-1:BingX:futures:BTCUSDT",
+  "partitionKey":"client-symbol:account-1:futures:BTCUSDT",
+  "provider":"BingX", "market":"futures", "symbol":"BTCUSDT"
+}

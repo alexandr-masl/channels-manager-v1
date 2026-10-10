@@ -2,8 +2,9 @@
 
 2026-10-10 · Base version · BingX Futures only.
 
-Slices 1–2 implemented: live intake prepares jobs and optionally confirms publication
-before acknowledgement. Slices 3–5 remain planned.
+Slices 1–3 implemented: live intake prepares jobs and optionally confirms publication
+before acknowledgement; the optional worker validates settings and admission.
+Slices 4–5 remain planned.
 
 Source of truth: TypeScript `src/handlers/signal-manager.ts`,
 `src/market-data/signal-market-data.ts`, and the BingX trade creation flow.
@@ -13,7 +14,7 @@ Source of truth: TypeScript `src/handlers/signal-manager.ts`,
 Include signal preparation, per-account jobs, confirmed RabbitMQ publication,
 and a separate account-execution consumer in this Rust application.
 
-Exclude the global open-trade limit, Mongo execution claims, Redis execution
+Exclude all trade-count limits (overall, per-user and team), Mongo execution claims, Redis execution
 locks and duplicate-execution protection. Keep stable job/trade identities and
 partition keys for wire compatibility. A direct Telegram acceptance reply is
 implemented. Other notifications, exchanges, Spot, commands and health endpoints
@@ -62,7 +63,7 @@ Do not add generic exchange frameworks or duplicate Mongo/RabbitMQ infrastructur
 
 1. Receive authorized ChannelContext; skip an empty client list.
 2. Load OPENED trades for unique eligible users and group them by user. Reuse
-   channel/user settings already loaded by intake. No overall capacity rejection.
+   channel/user settings already loaded by intake. No trade-count rejection.
 3. Load one BingX Futures price/metadata snapshot shared by all jobs. Keep parser
    symbol BTCUSDT; map it to BTC-USDT for exchange requests. Use optional metadata
    cache with API fallback, fetching current price separately.
@@ -94,22 +95,19 @@ acceptance store or claim records.
    own_settings is enabled, then active Futures overrides. Signal position size
    takes precedence using the original balance-fraction semantics.
 3. Perform BingX symbol/account-mode/balance/leverage checks. Preserve the original
-   business rules; do not silently change account mode. Trace any leverage mutation
-   explicitly when implementing admission.
+   decision matrix, automatically switching eligible One-Way accounts to Hedge.
+   A successful POST is sufficient; leverage mutations remain separate work.
 4. Build quantities and entry/profit/stop targets using original precision, minimum
    size and sizing rules. BREAKOUT selects STOP_LOSS_LIMIT entry targets.
 5. Produce the original trade_object/client_data envelope, stable trade ID and
    unchanged expires_at. Confirm publication to Trading Station before job ack.
 6. Log a sanitized outcome. No execution claim or deduplication record is written.
 
-Execution outcomes: PreparedTrade, Rejected, Expired, RetryableDependencyFailure,
-or UncertainSideEffect. Handlers map these to settlement. Retry read-only dependency
-failures through the existing bounded policy; do not blindly rerun an exchange
-mutation after an uncertain response. Park uncertain outcomes for diagnostics.
-Publication retries reuse the prepared bytes while they remain available; after
-process loss, this version does not guarantee identical reconstructed payloads or
-exactly-once execution. Define and test the diagnostics mapping before enabling
-exchange mutations.
+Execution outcomes: PreparedTrade, Rejected, Expired or RetryableDependencyFailure.
+Retry temporary read failures through the existing bounded policy. Mode-switch
+errors/timeouts stop and ACK the job without automatic mutation retry or readback.
+Preserve expiry before switching and after admission. Process loss can still cause
+redelivery; this version has no execution claims or exactly-once guarantee.
 
 ## Implementation slices
 
@@ -176,7 +174,7 @@ order outcomes. Account/order methods belong to slices 3–4; slice 2 adds no ex
 
 `CLIENT_TRADE_JOB_FANOUT_ENABLED` defaults to `false`. Enable it only with an
 intended compatible consumer on `satoshi-channel-updates.client-trade.bingx.futures`.
-This slice does not start a Rust client-job consumer. Preparation-only mode still
+The optional Rust admission consumer is described below. Preparation-only mode still
 logs and ACKs; enabled mode logs `Signal published` with confirmed counts.
 
 Jobs use the default exchange, non-durable queue, non-persistent JSON messages,
@@ -206,3 +204,66 @@ notification errors alone never retry the source. Source redelivery may repeat
 notifications. Preparation-only mode also sends replies when a token is configured.
 The default endpoint is `https://api.telegram.org`; `TELEGRAM_API_BASE_URL` allows
 only numeric HTTP loopback origins for tests. No Redis notification channel is used.
+
+## Slice 3 implementation checklist
+
+- [x] Validate job schema, identity, expiry, required signal fields and shared market snapshot
+  before dependencies; resolve channel/user/Futures settings and position override.
+- [x] Read signed BingX mode, positions, orders, balance and leverage with sanitized
+  errors. Combine with fresh managed-trade Mongo evidence for admission.
+- [x] Automatically switch eligible One-Way accounts to Hedge with one signed POST.
+  Accept success without confirmation GET; failures stop and ACK without switch retry.
+- [x] Register independent Telegram and client-job consumers, queue-specific retry
+  publishers, configurable prefetch, shared dependencies and bounded lifecycle cleanup.
+- [x] Bound the entire admission by operation timeout and remaining job expiry;
+  retry temporary read failures, reject invalid/expired jobs, log admitted summaries.
+- [x] Prove settings, admission, dual-consumer settlement and recovery with fixtures
+  and isolated services. Worker is off by default; enabled admission-only mode ACKs
+  after logging, without creating/publishing trades. Slice 4 adds the next stage.
+
+
+## Worker admission runtime
+
+`TELEGRAM_INTAKE_ENABLED=true` and `CLIENT_TRADE_WORKER_ENABLED=false` are the defaults.
+Enable the worker only for admission testing until slice 4: admitted jobs log
+`Client job admitted: ... execution_enabled=false` and ACK without creating trades.
+Disable the TypeScript consumer of this queue before enabling Rust on a shared broker.
+`CONSUMER_PREFETCH` bounds Telegram work; `CLIENT_TRADE_WORKER_PREFETCH` (default 2)
+bounds account jobs. Each role has its own Rabbit session, publisher and retry queue;
+Mongo, Redis and reusable HTTP clients are shared. Both roles recover and drain together.
+
+Job validation checks version/provider/market, stable identity, credentials, expiry,
+positive signal values and the normalized shared snapshot before network calls.
+Worker validation preserves TypeScript numeric/string price arrays; Telegram text
+parsing and its price-ordering checks are not rerun at this boundary. Settings preserve
+explicit nulls, active market overrides, signal position priority, and Futures margin
+(default isolated). Invalid numeric/boolean coercions are rejected with static reasons.
+
+Admission loads fresh managed trades and five signed BingX GETs: position mode,
+all positions, all open orders, USDT balance, and symbol leverage. It retains the
+original managed lifecycle/ownership policy and supports Hedge or legacy One-Way
+routes. Globally eligible One-Way accounts switch to Hedge automatically; requested-symbol
+positions/orders or valid NEW/OPENED managed blockers reject with `migrationRequired`.
+Activity only on other symbols retains One-Way. CLOSING trades do not block migration
+but retain valid leverage ownership. Incomplete evidence stops admission.
+
+The signed POST to `/openApi/swap/v1/positionSide/dual` sends `dualSidePosition=true`.
+Success requires HTTP success, API code 0 and object data; no confirmation GET is sent.
+Balance/leverage checks then continue using the loaded evidence and accepted Hedge mode.
+Switch errors and timeouts reject/ACK without retry; a timeout may still have changed
+account mode. There is no migration feature flag, readback or diagnostics queue flow.
+The operation deadline prevents a switch after expiry and bounds the whole attempt.
+Fresh evidence and the POST are not atomic; concurrent account changes remain possible.
+
+Admission retains typed `position_configuration`: Hedge (existing or switched) maps
+to `ORDER_LEDGER_V1`; permitted One-Way maps to `ONE_WAY_V1`. The tested
+`AdmittedAccount::apply_to_trade_object` helper writes `trade_object.positionConfiguration`
+for slice 4's builder. No complete trade is constructed/published in this slice.
+Leverage mismatch still reports `leverageChangeRequired` or `ownedLeverageMismatch`;
+no leverage mutations occur.
+
+Every admission is bounded by `RUNTIME_OPERATION_TIMEOUT_MS` and remaining
+`tradeExpiresAt`. Temporary reads retry on the client queue with unchanged payload;
+invalid/expired/rejected jobs ACK. All trade-count checks, execution claims and locks
+are absent. Current price/metadata reuse the signal's shared snapshot. Account reads
+use the same constrained BingX origin setting as public reads; tests use loopback only.

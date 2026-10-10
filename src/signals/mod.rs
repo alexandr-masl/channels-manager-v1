@@ -7,3 +7,5 @@ pub mod publication;
 mod validation;
 pub use model::{ParseOutcome, SignalError, TradingSignal};
 pub use parser::parse_signal;
+
+pub mod settings;

@@ -359,3 +359,44 @@ fn telegram_sender_is_optional_and_token_is_redacted() {
     assert_eq!(error.setting, "SATOSHI_TG_TOKEN");
     assert!(!format!("{error:?}").contains("invalid-secret"));
 }
+
+#[test]
+fn consumer_roles_and_prefetch_are_independent() {
+    let mut env = environment();
+    let defaults = AppConfig::from_lookup(|k| env.get(k).cloned()).unwrap();
+    assert!(defaults.telegram_intake_enabled);
+    assert!(!defaults.client_trade_worker_enabled);
+    assert_eq!(defaults.client_trade_worker_prefetch.get(), 2);
+    for intake in ["true", "false"] {
+        for worker in ["true", "false"] {
+            env.insert("TELEGRAM_INTAKE_ENABLED".into(), intake.into());
+            env.insert("CLIENT_TRADE_WORKER_ENABLED".into(), worker.into());
+            env.insert("CONSUMER_PREFETCH".into(), "7".into());
+            env.insert("CLIENT_TRADE_WORKER_PREFETCH".into(), "3".into());
+            let config = AppConfig::from_lookup(|k| env.get(k).cloned()).unwrap();
+            assert_eq!(config.telegram_intake_enabled, intake == "true");
+            assert_eq!(config.client_trade_worker_enabled, worker == "true");
+            assert_eq!(config.rabbitmq.prefetch.get(), 7);
+            assert_eq!(config.client_trade_worker_prefetch.get(), 3);
+        }
+    }
+}
+
+#[test]
+fn consumer_role_settings_reject_invalid_values() {
+    for (key, value) in [
+        ("TELEGRAM_INTAKE_ENABLED", "yes"),
+        ("CLIENT_TRADE_WORKER_ENABLED", "yes"),
+        ("CLIENT_TRADE_WORKER_PREFETCH", "0"),
+        ("CLIENT_TRADE_WORKER_PREFETCH", "65536"),
+    ] {
+        let mut env = environment();
+        env.insert(key.into(), value.into());
+        assert_eq!(
+            AppConfig::from_lookup(|k| env.get(k).cloned())
+                .unwrap_err()
+                .setting,
+            key
+        );
+    }
+}

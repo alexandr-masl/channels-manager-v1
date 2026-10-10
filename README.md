@@ -98,8 +98,8 @@ By default, messages are acknowledged after preparation logging.
 To publish jobs, set `CLIENT_TRADE_JOB_FANOUT_ENABLED=true` in `.env.local` and restart.
 The terminal then shows `Signal published:` with the confirmed `published_jobs` count.
 Jobs go to `satoshi-channel-updates.client-trade.bingx.futures`; Telegram messages
-are acknowledged after all job confirms. The Rust account-execution consumer is
-not implemented yet: enable only with an intended compatible consumer.
+are acknowledged after all job confirms. The Rust consumer currently performs admission only; enable publication with an
+intended compatible consumer.
 An existing TypeScript worker can execute these jobs. Coordinate exclusive ownership
 of Telegram intake and client-job consumption before using a shared broker.
 The configured databases must contain the channel, connected BingX accounts and active
@@ -112,7 +112,7 @@ same queue compete for messages. Keep publication disabled for preparation-only 
 
 
 Signal preparation loads per-user open trades and one shared BingX market snapshot.
-It preserves the original client-job payload, with no global trade-count limit or
+It preserves the original client-job payload, with no trade-count limits or
 execution claims/locks. See [signal manager design](docs/signal-manager.md).
 
 
@@ -135,3 +135,28 @@ separate work. No live Telegram send was performed by the automated tests.
 
 For containers, inject `SATOSHI_TG_TOKEN` through the runtime environment (a
 Kubernetes Secret in the cluster); never include it in the image or manifest.
+
+
+### Client-job admission worker (slice 3)
+
+For an isolated workflow test, set:
+
+```env
+TELEGRAM_INTAKE_ENABLED=true
+CLIENT_TRADE_JOB_FANOUT_ENABLED=true
+CLIENT_TRADE_WORKER_ENABLED=true
+CLIENT_TRADE_WORKER_PREFETCH=2
+```
+
+Restart `cargo run`. Accepted jobs log `Client job admitted` with `positionConfiguration`, margin mode
+and expiry. Rejections and temporary dependency retries have separate logs.
+The worker checks settings, symbol metadata, position mode, managed leverage owners,
+USDT balance and requested leverage. Eligible flat One-Way accounts automatically
+switch to Hedge with one signed POST; success needs no confirmation GET. Switch
+errors/timeouts log and ACK the job without automatic retry.
+
+**Admission only:** jobs are acknowledged after checking; no trades are created or
+published until slice 4. Keep the worker disabled on a live execution queue. For a
+worker-only test, set `TELEGRAM_INTAKE_ENABLED=false`; role prefetch and retry queues
+are independent. Hedge switching is active whenever the worker is enabled. No
+trade-count limits, leverage changes, execution claims or execution locks are applied. See [implementation plan](docs/signal-manager.md).
