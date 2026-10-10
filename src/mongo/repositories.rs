@@ -51,6 +51,19 @@ pub struct TradeRepository {
     timeout: Duration,
 }
 impl TradeRepository {
+    pub async fn get_opened_trades_by_users(
+        &self,
+        users: &[i64],
+    ) -> Result<Vec<Document>, MongoError> {
+        if users.is_empty() {
+            return Ok(vec![]);
+        }
+        self.find(
+            doc! {"state":"OPENED","chat_id":{"$in":users}},
+            doc! {"_id":1,"chat_id":1,"symbol":1,"exchange_client":1,"exchangeClientId":1,"idempotencyKey":1,"auto_Trade":1},
+        )
+        .await
+    }
     pub async fn get_trades_by_idempotency_keys(
         &self,
         keys: &[String],

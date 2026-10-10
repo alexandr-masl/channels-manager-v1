@@ -473,6 +473,70 @@ async fn invalid_driver_options_are_redacted() {
 
 #[tokio::test]
 #[ignore = "starts isolated mongod; requires loopback access"]
+async fn opened_trades_by_users_matches_original_filter_and_projection() {
+    let (server, admin) = Server::start().await;
+    let config = server.config();
+    let mut mongo = MongoConnections::new(config.mongo, config.runtime.operation_timeout);
+    mongo.connect().await.unwrap();
+    let expected = doc! {
+        "_id":"opened-42", "chat_id":42.0, "symbol":"BTC-USDT",
+        "exchange_client":"_bingx_futures_", "exchangeClientId":"account-42",
+        "idempotencyKey":"same-key", "auto_Trade":{"channel_id":-100.0,"message_id":7.0}
+    };
+    let mut opened = expected.clone();
+    opened.insert("state", "OPENED");
+    opened.insert("api_secret", "must-not-leak");
+    opened.insert("unrelated", "omit");
+    let mut second = opened.clone();
+    second.insert("_id", "opened-43");
+    second.insert("chat_id", 43_i64);
+    let mut second_expected = expected.clone();
+    second_expected.insert("_id", "opened-43");
+    second_expected.insert("chat_id", 43_i64);
+    admin
+        .database("trading")
+        .collection::<Document>(ACTIVE_TRADES_COLLECTION)
+        .insert_many([
+            opened,
+            second,
+            doc! {"chat_id":42.0,"state":"FINISHED"},
+            doc! {"chat_id":43_i64,"state":"CREATED"},
+            doc! {"chat_id":42_i64},
+            doc! {"chat_id":44.0,"state":"OPENED"},
+        ])
+        .await
+        .unwrap();
+    let repositories = mongo.repositories().unwrap();
+    let results = repositories
+        .trades
+        .get_opened_trades_by_users(&[42, 43])
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 2);
+    assert!(results.contains(&expected));
+    assert!(results.contains(&second_expected));
+    assert!(
+        repositories
+            .trades
+            .get_opened_trades_by_users(&[99])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    mongo.close().await.unwrap();
+    // An empty input must not attempt to use the closed connection.
+    assert!(
+        repositories
+            .trades
+            .get_opened_trades_by_users(&[])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+#[ignore = "starts isolated mongod; requires loopback access"]
 async fn channel_context_queries_match_original_collections_and_projections() {
     let (server, admin) = Server::start().await;
     let config = server.config();

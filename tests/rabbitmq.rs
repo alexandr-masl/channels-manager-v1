@@ -1466,6 +1466,22 @@ async fn startup_outage_preserves_backlog_until_required_dependency_recovers() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "starts isolated RabbitMQ, MongoDB and Redis; requires loopback access"]
 async fn binary_logs_raw_telegram_signal_and_acknowledges() {
+    binary_signal(false, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "starts isolated RabbitMQ, MongoDB and Redis; requires loopback access"]
+async fn binary_publishes_client_job_before_acknowledging_telegram() {
+    binary_signal(true, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "starts isolated services; requires loopback access"]
+async fn binary_telegram_notification_failure_does_not_block_jobs() {
+    binary_signal(true, true).await;
+}
+
+async fn binary_signal(publish: bool, notification_error: bool) {
     use std::io::{BufRead, BufReader};
     let broker = Broker::start().await;
     let stores = Stores::start(&broker.directory).await;
@@ -1484,6 +1500,87 @@ async fn binary_logs_raw_telegram_signal_and_acknowledges() {
     mongo.database("accounts").collection::<mongodb::bson::Document>("users").insert_one(mongodb::bson::doc! {
         "tg_chat_id":42.0, "auto_trading":true, "valid_till":mongodb::bson::DateTime::from_millis(mongodb::bson::DateTime::now().timestamp_millis()+60000)
     }).await.unwrap();
+    let quote_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let quote_endpoint = format!("http://{}", quote_listener.local_addr().unwrap());
+    let quotes = tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for path in [
+            "/openApi/swap/v2/quote/contracts",
+            "/openApi/swap/v1/ticker/price",
+        ] {
+            let (mut socket, _) = quote_listener.accept().await.unwrap();
+            let mut bytes = vec![0; 8192];
+            let count = socket.read(&mut bytes).await.unwrap();
+            let request = String::from_utf8_lossy(&bytes[..count]);
+            assert!(request.starts_with(&format!("GET {path}?symbol=ADA-USDT ")));
+            assert!(!request.contains("must-not-log"));
+            let data = if path.ends_with("contracts") {
+                json!([{"symbol":"ADA-USDT","status":1,"pricePrecision":4,"quantityPrecision":1,"tradeMinUSDT":"5"}])
+            } else {
+                json!({"symbol":"ADA-USDT","price":"0.2570"})
+            };
+            let body = json!({"code":0,"data":data}).to_string();
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        }
+    });
+    let mut telegram_env = Vec::new();
+    let notification = if publish {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        telegram_env.push(("SATOSHI_TG_TOKEN", "123:integration_secret".to_string()));
+        telegram_env.push((
+            "TELEGRAM_API_BASE_URL",
+            format!("http://{}", listener.local_addr().unwrap()),
+        ));
+        Some(tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            loop {
+                let mut chunk = [0; 2048];
+                let n = socket.read(&mut chunk).await.unwrap();
+                assert!(n > 0);
+                bytes.extend_from_slice(&chunk[..n]);
+                let request = String::from_utf8_lossy(&bytes);
+                if let Some((headers, body)) = request.split_once("\r\n\r\n") {
+                    let length: usize = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .and_then(|v| v.parse().ok())
+                        })
+                        .unwrap();
+                    if body.len() >= length {
+                        break;
+                    }
+                }
+            }
+            let request = String::from_utf8_lossy(&bytes);
+            assert!(request.starts_with("POST /bot123:integration_secret/sendMessage "));
+            let payload: serde_json::Value =
+                serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+            assert_eq!(payload["chat_id"], -1001596367704_i64);
+            assert_eq!(payload["reply_parameters"]["message_id"], 7);
+            assert_eq!(payload["text"], "created ✅");
+            let (status, body) = if notification_error {
+                (403, r#"{"ok":false,"description":"integration_secret"}"#)
+            } else {
+                (200, r#"{"ok":true,"result":{"message_id":123}}"#)
+            };
+            socket.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        }))
+    } else {
+        None
+    };
     struct Process(Child);
     impl Drop for Process {
         fn drop(&mut self) {
@@ -1495,6 +1592,9 @@ async fn binary_logs_raw_telegram_signal_and_acknowledges() {
         Command::new(env!("CARGO_BIN_EXE_channels-manager-v1"))
             .current_dir(&broker.directory)
             .env_clear()
+            .envs(telegram_env)
+            .env("CLIENT_TRADE_JOB_FANOUT_ENABLED", publish.to_string())
+            .env("BINGX_PUBLIC_API_BASE_URL", quote_endpoint)
             .env("RABBIT_MQ", broker.uri())
             .env("REDIS", "127.0.0.1")
             .env("REDIS_CLIENT_PORT", stores.redis_port.to_string())
@@ -1540,6 +1640,14 @@ async fn binary_logs_raw_telegram_signal_and_acknowledges() {
     let channel = admin.create_channel().await.unwrap();
     channel
         .confirm_select(ConfirmSelectOptions::default())
+        .await
+        .unwrap();
+    channel
+        .queue_declare(
+            BINGX_FUTURES_QUEUE.into(),
+            QueueDeclareOptions::default(),
+            FieldTable::default(),
+        )
         .await
         .unwrap();
     let body = serde_json::to_vec(&json!({"message_id":7,"date":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),"chat":{"id":-1001596367704i64,"type":"channel"},"text":include_str!("../examples/fixtures/ada-signal.txt").trim_end()})).unwrap();
@@ -1590,6 +1698,68 @@ async fn binary_logs_raw_telegram_signal_and_acknowledges() {
         assert!(!log.contains("must-not-log"));
         assert!(!log.contains("integration-account"));
     }
+    let prepared = timeout(Duration::from_secs(5), lines.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(prepared.starts_with("Signal prepared:"));
+    let summary: serde_json::Value =
+        serde_json::from_str(prepared.strip_prefix("Signal prepared: ").unwrap()).unwrap();
+    assert_eq!(summary["prepared_jobs"], 1);
+    assert_eq!(summary["published_jobs"], 0);
+    assert_eq!(summary["symbol"], "ADAUSDT");
+    assert_eq!(
+        summary["expires_at_ms"].as_u64().unwrap() - summary["accepted_at_ms"].as_u64().unwrap(),
+        60000
+    );
+    assert!(!prepared.contains("must-not-log"));
+    if publish {
+        let log = timeout(Duration::from_secs(5), lines.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            log.starts_with(if notification_error {
+                "Signal notification failed:"
+            } else {
+                "Signal notification sent:"
+            }),
+            "{log}"
+        );
+        assert!(!log.contains("integration_secret"));
+        timeout(Duration::from_secs(3), notification.unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let published = timeout(Duration::from_secs(5), lines.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(published.starts_with("Signal published: "), "{published}");
+        let report: serde_json::Value =
+            serde_json::from_str(published.strip_prefix("Signal published: ").unwrap()).unwrap();
+        assert_eq!(report["published_jobs"], 1);
+        assert!(!published.contains("must-not-log"));
+        let message = channel
+            .basic_get(BINGX_FUTURES_QUEUE.into(), BasicGetOptions::default())
+            .await
+            .unwrap()
+            .expect("confirmed job queued");
+        let job: serde_json::Value = serde_json::from_slice(&message.data).unwrap();
+        assert_eq!(job["symbol"], "ADAUSDT");
+        assert_eq!(job["client"]["clientId"], "integration-account");
+        assert_eq!(job["tradeExpiresAt"], summary["expires_at_ms"]);
+        assert_eq!(message.properties.delivery_mode(), &Some(1));
+        assert_eq!(
+            message.properties.content_type().as_ref().unwrap().as_str(),
+            "application/json"
+        );
+        message.ack(BasicAckOptions::default()).await.unwrap();
+    }
+    timeout(Duration::from_secs(3), quotes)
+        .await
+        .unwrap()
+        .unwrap();
     for (body, expected) in [
         (br#"{"text":"private-payload-without-envelope"}"#.to_vec(), "Telegram intake rejected: InvalidEnvelope"),
         (serde_json::to_vec(&json!({"message_id":8,"date":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),"chat":{"id":-1001596367704i64,"type":"channel"}})).unwrap(), "Telegram intake skipped: NoText"),
@@ -1630,4 +1800,138 @@ async fn binary_logs_raw_telegram_signal_and_acknowledges() {
             .unwrap()
             .is_none()
     );
+    assert!(
+        channel
+            .basic_get(BINGX_FUTURES_QUEUE.into(), BasicGetOptions::default())
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+#[ignore = "starts isolated RabbitMQ; requires loopback access"]
+async fn client_job_route_confirms_expiry_and_partial_failure_retry_source() {
+    use channels_manager_v1::{
+        contracts::messages::ClientTradeJob,
+        rabbitmq::{DeliveryOutcome, DeliveryPolicy, RetryReason},
+        signals::publication::{JobPublication, JobPublisher},
+    };
+    use futures_util::future::BoxFuture;
+    let broker = Broker::start().await;
+    let mut config = broker.config();
+    config.rabbitmq.input_queue = TELEGRAM_CHANNEL_QUEUE;
+    let mut rabbit = RabbitMq::new(config.rabbitmq.clone(), config.runtime.operation_timeout);
+    rabbit.connect_and_declare().await.unwrap();
+    rabbit.initialize_publisher().await.unwrap();
+    let publisher = rabbit.publisher().unwrap();
+    let admin = Connection::connect(&broker.uri(), ConnectionProperties::default())
+        .await
+        .unwrap();
+    let channel = admin.create_channel().await.unwrap();
+    channel
+        .confirm_select(ConfirmSelectOptions::default())
+        .await
+        .unwrap();
+    let mut consumer = rabbit.start_consumer().await.unwrap();
+    channel
+        .basic_publish(
+            "".into(),
+            TELEGRAM_CHANNEL_QUEUE.into(),
+            BasicPublishOptions::default(),
+            b"original-signal",
+            BasicProperties::default(),
+        )
+        .await
+        .unwrap()
+        .await
+        .unwrap();
+    let delivery = consumer.next().await.unwrap().unwrap();
+    struct LoseRoute {
+        publisher: channels_manager_v1::rabbitmq::Publisher,
+        channel: lapin::Channel,
+        calls: AtomicUsize,
+    }
+    impl JobPublisher for LoseRoute {
+        fn publish_job<'a>(
+            &'a self,
+            message: &'a PreparedPublication,
+        ) -> BoxFuture<'a, Result<(), RabbitError>> {
+            Box::pin(async move {
+                if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                    let received = self
+                        .channel
+                        .basic_get(BINGX_FUTURES_QUEUE.into(), BasicGetOptions::default())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(received.data, message.body());
+                    assert_eq!(received.properties.delivery_mode(), &Some(1));
+                    assert_eq!(
+                        received.properties.message_id().as_ref().unwrap().as_str(),
+                        "job-key"
+                    );
+                    let headers = received.properties.headers().as_ref().unwrap();
+                    assert!(headers.inner().contains_key(PUBLISHED_AT_HEADER));
+                    assert!(headers.inner().contains_key(IDEMPOTENCY_HEADER));
+                    received.ack(BasicAckOptions::default()).await.unwrap();
+                    self.channel
+                        .queue_delete(BINGX_FUTURES_QUEUE.into(), QueueDeleteOptions::default())
+                        .await
+                        .unwrap();
+                }
+                self.publisher.publish(message).await
+            })
+        }
+    }
+    let sink = LoseRoute {
+        publisher: publisher.clone(),
+        channel,
+        calls: AtomicUsize::new(0),
+    };
+    let mut job: ClientTradeJob =
+        serde_json::from_str(include_str!("fixtures/bingx-job.json")).unwrap();
+    job.idempotency_key = "job-key".into();
+    job.trade_expires_at = Some(1);
+    assert_eq!(
+        publisher
+            .publish(&PreparedPublication::client_job(&job).unwrap())
+            .await,
+        Err(RabbitError::Expired)
+    );
+    job.trade_expires_at = Some(4102444800000);
+    let duplicate = serde_json::from_value(serde_json::to_value(&job).unwrap()).unwrap();
+    let failure = JobPublication::new(1, Duration::from_millis(1))
+        .publish(&[job, duplicate], &sink)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.published_jobs, 1);
+    assert_eq!(failure.error, RabbitError::Unroutable);
+    assert_eq!(sink.calls.load(Ordering::SeqCst), 3);
+    DeliveryPolicy::new(&config.rabbitmq)
+        .settle(
+            delivery,
+            DeliveryOutcome::PreClaimRetry(RetryReason::DependencyUnavailable),
+            &publisher,
+        )
+        .await
+        .unwrap();
+    let retry = timeout(Duration::from_secs(3), consumer.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(retry.body(), b"original-signal");
+    assert_eq!(
+        retry
+            .properties()
+            .headers()
+            .as_ref()
+            .unwrap()
+            .inner()
+            .get(ORIGINAL_QUEUE_HEADER)
+            .unwrap(),
+        &lapin::types::AMQPValue::LongString(TELEGRAM_CHANNEL_QUEUE.into())
+    );
+    retry.ack().await.unwrap();
 }

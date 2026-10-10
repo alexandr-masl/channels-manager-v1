@@ -28,6 +28,19 @@ async fn main() -> ExitCode {
         println!("Configuration valid.");
         return ExitCode::SUCCESS;
     }
+    println!(
+        "Telegram acceptance replies: {}",
+        if config.telegram_bot_token.is_some() {
+            "enabled"
+        } else {
+            "disabled (SATOSHI_TG_TOKEN unset)"
+        }
+    );
+    let publication_mode = if config.client_trade_job_fanout_enabled {
+        "client-job publication enabled"
+    } else {
+        "preparation only; client-job publication disabled"
+    };
     let runtime = config.runtime.clone();
     let adapter = match Infrastructure::for_telegram_intake(config) {
         Ok(adapter) => adapter,
@@ -44,7 +57,7 @@ async fn main() -> ExitCode {
         }
     };
     println!(
-        "Starting infrastructure; incoming {TELEGRAM_CHANNEL_QUEUE} messages will be logged and acknowledged."
+        "Starting infrastructure; incoming {TELEGRAM_CHANNEL_QUEUE} messages: {publication_mode}."
     );
     match run_until_signal(lifecycle).await {
         Ok(()) => ExitCode::SUCCESS,

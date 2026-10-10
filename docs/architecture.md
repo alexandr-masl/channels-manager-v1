@@ -4,10 +4,13 @@
 
 Keep this document current as implementation decisions change. The TypeScript
 `satoshi-channel-updates-manager` remains the behavioral source of truth.
-Implemented through slice 3: Telegram intake validates structure and source time,
+Implemented through signal preparation and optional job publication: Telegram intake validates structure and source time,
 authorizes the channel, parses USDT Futures signals, selects eligible BingX accounts
-and loads user settings. It logs context or skip/rejection reasons and acknowledges.
-Job preparation and fan-out remain planned.
+and loads user settings, per-user open trades and shared BingX market data.
+It prepares client jobs and logs summaries. With `CLIENT_TRADE_JOB_FANOUT_ENABLED=true`,
+it confirms publication before acknowledging intake; the default remains preparation-only.
+An optional outbound Telegram sender replies `created ✅` after preparation when
+`SATOSHI_TG_TOKEN` is configured. Account execution remains planned.
 The workflows below extend the initial client-job migration to include signal intake.
 
 ## Workflows
@@ -27,11 +30,13 @@ Input: `tg_bot_channel_update`.
 Input: `satoshi-channel-updates.client-trade.bingx.futures`.
 
 1. Validate job identity and original expiry; resolve effective trading settings.
-2. Check duplicate protection and acquire the MongoDB execution claim.
-3. Acquire the Redis account lease; perform BingX admission and exchange checks.
-4. Build the trade payload and confirm publication to `create-new-trusted-trade`
+2. Perform BingX admission and exchange checks.
+3. Build the trade payload and confirm publication to `create-new-trusted-trade`
    (or `RABBITMQ_QUEUE`).
-5. Record the terminal outcome, release resources, and settle the delivery.
+4. Record the outcome and settle the delivery.
+
+Mongo execution claims and Redis execution locks are deferred to a separate issue.
+The base worker does not guarantee duplicate-execution protection.
 
 Retain both queues within one application, with explicitly configured consumers.
 This lets intake and account execution scale independently.
@@ -43,10 +48,10 @@ This lets intake and account execution scale independently.
 | `main.rs`, `infrastructure.rs` | Configuration, dependency wiring, worker lifecycle |
 | `telegram/{message,handler,workflow,channel_update,context}.rs` | Telegram envelope, delivery settlement, channel validation and client fan-out |
 | `signals/{model,parser,validation,settings}.rs` | Typed signals, pure text parsing, consistency checks, effective settings |
-| `trading/{job_handler,execution}.rs` | Job delivery, claims, leases, deadlines and terminal outcomes |
+| `trading/{job_handler,execution}.rs` | Job delivery, deadlines and execution outcomes |
 | `exchanges/bingx/{client,admission,trade_builder,workflow}.rs` | HTTP/auth, account checks, trade calculations and BingX orchestration |
 | `mongo/` | Existing repositories plus channel, profile and settings queries |
-| `redis/` | Cross-pod account locks and optional API metadata cache |
+| `redis/` | Optional API metadata cache; execution locks deferred |
 | `rabbitmq/`, `contracts/` | Transport, confirms, delivery policy and external wire formats |
 
 New module paths are planned; existing infrastructure is reused. Keep validators
@@ -56,9 +61,12 @@ keep parsing and calculations testable without network access.
 ## Invariants
 
 - Handlers own RabbitMQ settlement; workflows return typed outcomes.
-- Only pre-claim failures may request job retries. Post-claim failures are terminal.
-- Preserve work/trade IDs, original expiry and serialized publication bytes on retry.
-- Partial fan-out and lost acknowledgements can duplicate jobs; claims suppress repeated execution.
+- Define retry outcomes explicitly; do not blindly retry uncertain exchange side effects.
+  Claim-aware retry rules will be added with the separate deduplication issue.
+- Preserve work/trade IDs and each job’s expiry. Reuse prepared publication bytes
+  on retry; full reconstruction after process loss is not guaranteed in the base version.
+- Partial fan-out and lost acknowledgements can duplicate jobs. Stable IDs remain
+  in the contract, but execution deduplication is deferred to a separate issue.
 - Redis carries no inter-app messages. All inter-app communication uses RabbitMQ.
 - Coordinate exclusive queue ownership with TypeScript during migration.
 - `Infrastructure::for_telegram_intake` selects the raw queue and handler explicitly;
@@ -66,10 +74,13 @@ keep parsing and calculations testable without network access.
 
 ## Implementation order
 
+The next stage is detailed in [signal manager design](signal-manager.md):
+prepare BingX Futures jobs first, then add confirmed publication.
+
 1. Extract the Telegram handler; decode, parse, validate and log the ADA signal fixture.
 2. Add channel authorization, client selection, settings and job fan-out.
-3. Add claimed BingX execution, admission, trade construction and publication.
-4. Verify both workflows, recovery and duplicate handling before queue cutover.
+3. Add BingX execution, admission, trade construction and publication.
+4. Verify both workflows and recovery. Add execution deduplication in a separate issue.
 
 ### Suggested structure
 
@@ -91,7 +102,7 @@ src/
 
   trading/
     job_handler.rs            # Client job delivery and settlement
-    execution.rs              # Claims, leases, deadlines, terminal outcomes
+    execution.rs              # Deadlines and execution outcomes
 
   exchanges/
     bingx/
@@ -147,7 +158,8 @@ Decimal strings and leverage notation retain TypeScript wire compatibility.
 
 `TelegramHandler` logs `Signal parsed: ... result=<JSON>` and the context summary
 when eligible accounts exist. Other outcomes log a static skip/rejection reason.
-Job fan-out and trading actions are not implemented yet.
+Signal preparation and optional confirmed job fan-out now follow context loading;
+account execution remains planned.
 
 ### Compatibility trace (2026-10-04)
 
@@ -196,8 +208,10 @@ accounts), `Rejected` (invalid signal/context), or a Mongo dependency error.
 The handler logs only parsed signal data, IDs, eligible counts and static reasons.
 Contexts and clients have no Debug/Serialize implementation because they contain
 credentials. Mongo errors use the existing bounded retry/dead-letter policy;
-lookup failures never become empty results. Ready/skip/reject are acknowledged.
+lookup failures never become empty results. Skips/rejections are acknowledged;
+ready contexts continue through preparation and optional confirmed publication.
 
 Local signal tests now require an existing channel, a connected BingX account and
 an active auto-trading subscription in the configured databases. Without those,
-expect a skip log. No external account calls or trade/job publication occur yet.
+expect a skip log. Public market-data requests, job preparation and optional job
+publication follow this stage. No exchange account calls or final trade publication occur yet.

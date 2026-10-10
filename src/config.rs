@@ -43,6 +43,10 @@ impl std::error::Error for ConfigError {}
 
 #[derive(Debug)]
 pub struct AppConfig {
+    pub telegram_bot_token: Option<ConnectionString>,
+    pub telegram_api_base_url: String,
+    pub client_trade_job_fanout_enabled: bool,
+    pub bingx_public_api_base_url: String,
     pub rabbitmq: RabbitMqConfig,
     pub redis: RedisConfig,
     pub mongo: MongoConfig,
@@ -185,6 +189,52 @@ impl AppConfig {
     fn parse(
         reader: Reader<impl Fn(&'static str) -> Result<Option<String>, ConfigError>>,
     ) -> Result<Self, ConfigError> {
+        let telegram_bot_token = (reader.0)("SATOSHI_TG_TOKEN")?
+            .map(|token| {
+                if crate::telegram::sender::valid_token(&token) {
+                    Ok(ConnectionString(token))
+                } else {
+                    Err(ConfigError {
+                        setting: "SATOSHI_TG_TOKEN",
+                        reason: "must be a valid bot token",
+                    })
+                }
+            })
+            .transpose()?;
+        let telegram_api_base_url =
+            reader.text("TELEGRAM_API_BASE_URL", Some("https://api.telegram.org"))?;
+        if !crate::telegram::sender::valid_endpoint(&telegram_api_base_url) {
+            return Err(ConfigError {
+                setting: "TELEGRAM_API_BASE_URL",
+                reason: "must be Telegram HTTPS or a numeric HTTP loopback test origin",
+            });
+        }
+        let bingx_public_api_base_url = reader.text(
+            "BINGX_PUBLIC_API_BASE_URL",
+            Some("https://open-api.bingx.com"),
+        )?;
+        if bingx_public_api_base_url != "https://open-api.bingx.com" {
+            let valid = url::Url::parse(&bingx_public_api_base_url).is_ok_and(|url| {
+                let loopback = match url.host() {
+                    Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+                    Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+                    _ => false,
+                };
+                loopback
+                    && url.scheme() == "http"
+                    && url.username().is_empty()
+                    && url.password().is_none()
+                    && url.path() == "/"
+                    && url.query().is_none()
+                    && url.fragment().is_none()
+            });
+            if !valid {
+                return Err(ConfigError {
+                    setting: "BINGX_PUBLIC_API_BASE_URL",
+                    reason: "must be the BingX HTTPS origin or a numeric HTTP loopback test origin",
+                });
+            }
+        }
         let uri = reader.uri("RABBIT_MQ", false)?;
         let bot_uri = reader.uri("MONGO_PATH", true)?;
         let trade_station_uri = reader.uri("TRADE_STATION_MONGO_PATH", true)?;
@@ -235,6 +285,11 @@ impl AppConfig {
         };
         runtime.validate()?;
         Ok(Self {
+            telegram_bot_token,
+            telegram_api_base_url,
+            client_trade_job_fanout_enabled: reader
+                .boolean("CLIENT_TRADE_JOB_FANOUT_ENABLED", false)?,
+            bingx_public_api_base_url,
             rabbitmq: RabbitMqConfig {
                 uri,
                 input_queue: BINGX_FUTURES_QUEUE,

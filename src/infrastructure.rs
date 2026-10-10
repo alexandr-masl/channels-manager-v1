@@ -13,7 +13,10 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct WorkerServices {
+    pub telegram_sender: Option<Arc<crate::telegram::sender::TelegramSender>>,
+    pub job_publication: Option<crate::signals::publication::JobPublication>,
     pub mongo: MongoRepositories,
+    pub market: Arc<crate::exchanges::bingx::market_data::BingxMarketData>,
     pub locks: LeaseManager,
     pub metadata: MetadataCache,
     pub publisher: Publisher,
@@ -31,6 +34,9 @@ pub trait DeliveryHandler: Send + Sync + 'static {
     ) -> BoxFuture<'static, Result<(), RabbitError>>;
 }
 pub struct Infrastructure {
+    telegram_sender: Option<Arc<crate::telegram::sender::TelegramSender>>,
+    job_publication: Option<crate::signals::publication::JobPublication>,
+    market: Arc<crate::exchanges::bingx::market_data::BingxMarketData>,
     mongo: MongoConnections,
     redis: RedisConnections,
     rabbit: RabbitMq,
@@ -53,9 +59,47 @@ impl Infrastructure {
         config: AppConfig,
         handler: Option<Arc<dyn DeliveryHandler>>,
     ) -> Result<Self, Failure> {
+        let redis = RedisConnections::new(config.redis, &config.runtime).map_err(Failure::from)?;
+        let market = if config.bingx_public_api_base_url == "https://open-api.bingx.com" {
+            crate::exchanges::bingx::market_data::BingxMarketData::new(
+                redis.cache(),
+                config.runtime.operation_timeout,
+            )
+        } else {
+            crate::exchanges::bingx::market_data::BingxMarketData::with_loopback_endpoint(
+                redis.cache(),
+                config.runtime.operation_timeout,
+                &config.bingx_public_api_base_url,
+            )
+        }
+        .map_err(|_| Failure::permanent("BINGX_CLIENT_CONFIGURATION"))?;
+        let telegram_sender = config
+            .telegram_bot_token
+            .as_ref()
+            .map(|token| {
+                crate::telegram::sender::TelegramSender::new(
+                    token.expose(),
+                    &config.telegram_api_base_url,
+                    config
+                        .runtime
+                        .operation_timeout
+                        .min(std::time::Duration::from_secs(5)),
+                )
+                .map(Arc::new)
+                .map_err(|_| Failure::permanent("TELEGRAM_SENDER_CONFIGURATION"))
+            })
+            .transpose()?;
         Ok(Self {
+            telegram_sender,
+            job_publication: config.client_trade_job_fanout_enabled.then(|| {
+                crate::signals::publication::JobPublication::new(
+                    config.rabbitmq.retry_max_attempts.get(),
+                    config.rabbitmq.retry_delay,
+                )
+            }),
+            market: Arc::new(market),
             mongo: MongoConnections::new(config.mongo, config.runtime.operation_timeout),
-            redis: RedisConnections::new(config.redis, &config.runtime).map_err(Failure::from)?,
+            redis,
             concurrency: config.rabbitmq.prefetch.get() as usize,
             delivery_policy: DeliveryPolicy::new(&config.rabbitmq),
             rabbit: RabbitMq::new(config.rabbitmq, config.runtime.operation_timeout),
@@ -78,6 +122,9 @@ impl Infrastructure {
             return Ok(());
         }
         let services = WorkerServices {
+            telegram_sender: self.telegram_sender.clone(),
+            job_publication: self.job_publication.clone(),
+            market: self.market.clone(),
             mongo: self.mongo.repositories().map_err(Failure::from)?,
             locks: self.redis.locks(),
             metadata: self.redis.cache(),

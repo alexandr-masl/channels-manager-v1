@@ -3,6 +3,7 @@ mod channel_update;
 mod context;
 mod handler;
 mod message;
+pub mod sender;
 mod workflow;
 
 pub use channel_update::{

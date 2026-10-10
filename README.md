@@ -4,7 +4,8 @@ Rust application for the incremental migration of `satoshi-channel-updates-manag
 
 The app connects MongoDB, Redis, and RabbitMQ through the runtime lifecycle.
 The executable validates Telegram envelopes/source timestamps, authorizes channels,
-parses signals and loads eligible BingX account context, then logs and acknowledges messages from `tg_bot_channel_update`. BingX Futures trade processing follows separately.
+parses signals, loads eligible BingX account context and prepares client jobs,
+then logs and acknowledges messages from `tg_bot_channel_update`. BingX Futures trade processing follows separately.
 See [AGENTS.md](AGENTS.md) for the migration boundary and source-of-truth documentation.
 The proposed workflows and module layout are in [application architecture](docs/architecture.md).
 
@@ -92,11 +93,45 @@ channel ID `-1001596367704`. It publishes to the original bot queue
 `tg_bot_channel_update` on a local broker with confirms and a 60-second TTL.
 The app validates the envelope/source time and logs `Signal parsed: ... result={...}`
 for the base USDT Futures format. Other messages log a skip/rejection reason.
-Messages are acknowledged after context logging; job publication and trade execution are not implemented yet.
+The terminal also shows `Signal prepared:` with job counts and `published_jobs: 0`.
+By default, messages are acknowledged after preparation logging.
+To publish jobs, set `CLIENT_TRADE_JOB_FANOUT_ENABLED=true` in `.env.local` and restart.
+The terminal then shows `Signal published:` with the confirmed `published_jobs` count.
+Jobs go to `satoshi-channel-updates.client-trade.bingx.futures`; Telegram messages
+are acknowledged after all job confirms. The Rust account-execution consumer is
+not implemented yet: enable only with an intended compatible consumer.
+An existing TypeScript worker can execute these jobs. Coordinate exclusive ownership
+of Telegram intake and client-job consumption before using a shared broker.
 The configured databases must contain the channel, connected BingX accounts and active
 auto-trading subscriptions. Otherwise the workflow logs its skip reason.
 `CLIENT_TRADE_WORKER_QUEUES` describes the later BingX client-job boundary and is
 not the queue selected by `Infrastructure::for_telegram_intake`.
 
 Use a local broker/vhost without the TypeScript consumer: consumers sharing the
-same queue compete for messages. This logger acknowledges messages after logging.
+same queue compete for messages. Keep publication disabled for preparation-only tests.
+
+
+Signal preparation loads per-user open trades and one shared BingX market snapshot.
+It preserves the original client-job payload, with no global trade-count limit or
+execution claims/locks. See [signal manager design](docs/signal-manager.md).
+
+
+### Automatic Telegram acceptance reply
+
+Set `SATOSHI_TG_TOKEN` in `.env.local` to the original bot token and restart
+`cargo run`. The app sends `created ✅` as a reply to the original channel message
+after successful preparation, before job publication. This also runs in
+preparation-only mode. Without the token, replies are disabled.
+
+The sender uses only Telegram's [sendMessage API](https://core.telegram.org/bots/api#sendmessage);
+it does not poll updates or modify webhooks. The bot needs posting permission in
+the channel and the source message must exist. The synthetic RabbitMQ example
+uses a generated message ID, so use a real channel signal to test replies.
+
+Logs show `Signal notification sent` or a sanitized failure reason. Requests have
+a maximum five-second timeout and no automatic resend. Notification failures do
+not block client jobs. Source redelivery may repeat a reply; deduplication remains
+separate work. No live Telegram send was performed by the automated tests.
+
+For containers, inject `SATOSHI_TG_TOKEN` through the runtime environment (a
+Kubernetes Secret in the cluster); never include it in the image or manifest.

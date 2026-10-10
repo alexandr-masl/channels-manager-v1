@@ -3,6 +3,7 @@ use crate::{
     contracts::rabbitmq::TELEGRAM_CHANNEL_QUEUE,
     infrastructure::{DeliveryHandler, WorkerServices},
     rabbitmq::{DeliveryOutcome, InboundDelivery, RabbitError, RetryReason},
+    signals::manager::{PreparationOutcome, SignalManager},
 };
 use futures_util::future::BoxFuture;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -50,6 +51,100 @@ impl DeliveryHandler for TelegramHandler {
                                     .collect::<std::collections::BTreeSet<_>>()
                                     .len()
                             );
+                            match SignalManager::new(
+                                &services.mongo.trades,
+                                services.market.as_ref(),
+                            )
+                            .prepare(*context, || {
+                                mongodb::bson::DateTime::now()
+                                    .timestamp_millis()
+                                    .try_into()
+                                    .unwrap_or(0)
+                            })
+                            .await
+                            {
+                                Ok(PreparationOutcome::Prepared(mut batch)) => {
+                                    println!(
+                                        "Signal prepared: {}",
+                                        serde_json::to_string(&batch.summary)
+                                            .map_err(|_| RabbitError::InvalidPayload)?
+                                    );
+                                    if let Some(sender) = &services.telegram_sender {
+                                        match sender.send_accepted(channel_id, message_id).await {
+                                            Ok(reply_id) => println!(
+                                                "Signal notification sent: channel_id={channel_id} message_id={message_id} reply_id={reply_id}"
+                                            ),
+                                            Err(reason) => println!(
+                                                "Signal notification failed: channel_id={channel_id} message_id={message_id} reason={reason:?}"
+                                            ),
+                                        }
+                                    }
+                                    if let Some(publication) = &services.job_publication {
+                                        match publication
+                                            .publish(&batch.jobs, &services.publisher)
+                                            .await
+                                        {
+                                            Ok(count) => {
+                                                batch.summary.published_jobs = count;
+                                                println!(
+                                                    "Signal published: {}",
+                                                    serde_json::to_string(&batch.summary)
+                                                        .map_err(|_| RabbitError::InvalidPayload)?
+                                                );
+                                            }
+                                            Err(failure) => {
+                                                eprintln!(
+                                                    "Signal publication stopped: channel_id={channel_id} message_id={message_id} published_jobs={} prepared_jobs={} reason={:?}",
+                                                    failure.published_jobs,
+                                                    batch.jobs.len(),
+                                                    failure.error
+                                                );
+                                                let outcome = match failure.error {
+                                                    RabbitError::Expired
+                                                    | RabbitError::InvalidPayload => {
+                                                        DeliveryOutcome::Rejected
+                                                    }
+                                                    RabbitError::Nack
+                                                    | RabbitError::Unroutable
+                                                    | RabbitError::Timeout => {
+                                                        DeliveryOutcome::PreClaimRetry(
+                                                            RetryReason::DependencyUnavailable,
+                                                        )
+                                                    }
+                                                    // A failed session cannot safely publish a replacement. Dropping
+                                                    // the unsettled delivery lets lifecycle recovery return it.
+                                                    error => return Err(error),
+                                                };
+                                                return services
+                                                    .delivery_policy
+                                                    .settle(delivery, outcome, &services.publisher)
+                                                    .await;
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(PreparationOutcome::Skipped(reason)) => println!(
+                                    "Signal preparation skipped: channel_id={channel_id} message_id={message_id} reason={reason:?}"
+                                ),
+                                Ok(PreparationOutcome::Rejected(reason)) => println!(
+                                    "Signal preparation rejected: channel_id={channel_id} message_id={message_id} reason={reason:?}"
+                                ),
+                                Err(error) => {
+                                    eprintln!(
+                                        "Signal preparation retry: channel_id={channel_id} message_id={message_id} reason={error:?}"
+                                    );
+                                    return services
+                                        .delivery_policy
+                                        .settle(
+                                            delivery,
+                                            DeliveryOutcome::PreClaimRetry(
+                                                RetryReason::DependencyUnavailable,
+                                            ),
+                                            &services.publisher,
+                                        )
+                                        .await;
+                                }
+                            }
                         }
                         Ok(ChannelOutcome::Skipped(reason)) => println!(
                             "Channel update skipped: channel_id={channel_id} message_id={message_id} reason={reason:?}"
@@ -77,7 +172,7 @@ impl DeliveryHandler for TelegramHandler {
                 IntakeOutcome::Skipped(reason) => println!("Telegram intake skipped: {reason:?}"),
                 IntakeOutcome::Rejected(reason) => println!("Telegram intake rejected: {reason:?}"),
             }
-            // Slice 3 ends at context logging. Future job publication must finish before ack.
+            // Enabled publication reaches here only after all jobs are confirmed.
             delivery.ack().await
         })
     }

@@ -296,3 +296,66 @@ fn redis_ipv6_brackets_must_be_balanced_and_are_removed_for_the_driver() {
         "::1"
     );
 }
+
+#[test]
+fn market_data_endpoint_only_allows_bingx_or_local_test_origin() {
+    for endpoint in [
+        "http://example.com",
+        "https://user:secret@open-api.bingx.com",
+        "http://127.0.0.1:1234/path",
+        "http://127.0.0.1:1234?key=secret",
+    ] {
+        let mut env = environment();
+        env.insert("BINGX_PUBLIC_API_BASE_URL".into(), endpoint.into());
+        let error = AppConfig::from_lookup(|key| env.get(key).cloned()).unwrap_err();
+        assert_eq!(error.setting, "BINGX_PUBLIC_API_BASE_URL");
+        assert!(!error.to_string().contains("secret"));
+    }
+    for endpoint in ["https://open-api.bingx.com", "http://127.0.0.1:1234"] {
+        let mut env = environment();
+        env.insert("BINGX_PUBLIC_API_BASE_URL".into(), endpoint.into());
+        assert!(AppConfig::from_lookup(|key| env.get(key).cloned()).is_ok());
+    }
+}
+
+#[test]
+fn job_publication_requires_explicit_boolean_enablement() {
+    let mut env = environment();
+    assert!(
+        !AppConfig::from_lookup(|k| env.get(k).cloned())
+            .unwrap()
+            .client_trade_job_fanout_enabled
+    );
+    env.insert("CLIENT_TRADE_JOB_FANOUT_ENABLED".into(), "true".into());
+    assert!(
+        AppConfig::from_lookup(|k| env.get(k).cloned())
+            .unwrap()
+            .client_trade_job_fanout_enabled
+    );
+    env.insert("CLIENT_TRADE_JOB_FANOUT_ENABLED".into(), "yes".into());
+    assert_eq!(
+        AppConfig::from_lookup(|k| env.get(k).cloned())
+            .unwrap_err()
+            .setting,
+        "CLIENT_TRADE_JOB_FANOUT_ENABLED"
+    );
+}
+
+#[test]
+fn telegram_sender_is_optional_and_token_is_redacted() {
+    let mut env = environment();
+    assert!(
+        AppConfig::from_lookup(|k| env.get(k).cloned())
+            .unwrap()
+            .telegram_bot_token
+            .is_none()
+    );
+    env.insert("SATOSHI_TG_TOKEN".into(), "123:very_private_token".into());
+    let config = AppConfig::from_lookup(|k| env.get(k).cloned()).unwrap();
+    assert!(config.telegram_bot_token.is_some());
+    assert!(!format!("{config:?}").contains("very_private_token"));
+    env.insert("SATOSHI_TG_TOKEN".into(), "invalid-secret".into());
+    let error = AppConfig::from_lookup(|k| env.get(k).cloned()).unwrap_err();
+    assert_eq!(error.setting, "SATOSHI_TG_TOKEN");
+    assert!(!format!("{error:?}").contains("invalid-secret"));
+}
