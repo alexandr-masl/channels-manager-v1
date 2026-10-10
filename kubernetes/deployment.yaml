@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: satoshi-channel-updates-manager
+  labels:
+    io.kompose.service: satoshi-channel-updates-manager
+spec:
+  replicas: 3
+  # Stop the old consumer pods before starting the replacement implementation.
+  strategy:
+    type: Recreate
+    rollingUpdate: null
+  selector:
+    matchLabels:
+      io.kompose.service: satoshi-channel-updates-manager
+  template:
+    metadata:
+      labels:
+        io.kompose.service: satoshi-channel-updates-manager
+    spec:
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: satoshi-channel-updates-manager
+          image: kolobobolobo/satoshi-channels-updates:latest
+          imagePullPolicy: Always
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+          # Clear the TypeScript HTTP probes when updating the existing resource.
+          startupProbe: null
+          readinessProbe: null
+          livenessProbe: null
+          env:
+            - name: MONGO_PATH
+              value: mongodb://mongo-tg-client/MyBot
+            - name: TRADE_STATION_MONGO_PATH
+              value: mongodb://mongo/MCR_trading_api
+            - name: ACCOUNT_VALIDATOR_MONGO_PATH
+              value: mongodb://mongo-account-validator/McrAccValidator
+            - name: RABBIT_MQ
+              value: amqp://guest:guest@rabbitmq
+            - name: REDIS
+              value: redis
+            - name: REDIS_CLIENT_PORT
+              value: "6379"
+            - name: CLIENT_TRADE_WORKER_QUEUES
+              value: satoshi-channel-updates.client-trade.bingx.futures
+            - name: CONSUMER_PREFETCH
+              value: "6"
+            - name: SHUTDOWN_DRAIN_TIMEOUT_MS
+              value: "10000"
+            - name: SHUTDOWN_TIMEOUT_MS
+              value: "30000"
+            - name: SERVICE_REVISION
+              value: channels-manager-v1
+          resources:
+            requests:
+              cpu: "500m"
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+      imagePullSecrets:
+        - name: regcred
+      restartPolicy: Always

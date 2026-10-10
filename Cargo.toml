@@ -3,6 +3,15 @@ name = "channels-manager-v1"
 version = "0.1.0"
 edition = "2024"
 
+[profile.release]
+opt-level = 3
+debug = false
+strip = "symbols"
+lto = "thin"
+codegen-units = 1
+# Preserve panic unwinding and task failure handling.
+panic = "unwind"
+
 [dependencies]
 async-compat = "0.2.6"
 dotenvy = "0.15.7"

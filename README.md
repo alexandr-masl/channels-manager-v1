@@ -64,6 +64,9 @@ cargo test --test rabbitmq -- --include-ignored
 
 ## Complete verification and cutover
 
+Docker, local Compose, and Kubernetes replacement commands are in
+[container deployment](docs/deployment.md), using the original Docker Hub and cluster names.
+
 Run `./scripts/verify.sh` with all three service binaries installed. It includes
 all integration tests and matches the GitHub Actions verification job.
 See [verification coverage and rollout](docs/verification-and-rollout.md) for setup,
