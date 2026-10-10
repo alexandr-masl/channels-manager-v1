@@ -3,8 +3,8 @@
 Rust application for the incremental migration of `satoshi-channel-updates-manager`.
 
 The app connects MongoDB, Redis, and RabbitMQ through the runtime lifecycle.
-The executable validates Telegram envelopes/source timestamps, then logs and
-acknowledges messages from `tg_bot_channel_update`. BingX Futures trade processing follows separately.
+The executable validates Telegram envelopes/source timestamps, authorizes channels,
+parses signals and loads eligible BingX account context, then logs and acknowledges messages from `tg_bot_channel_update`. BingX Futures trade processing follows separately.
 See [AGENTS.md](AGENTS.md) for the migration boundary and source-of-truth documentation.
 The proposed workflows and module layout are in [application architecture](docs/architecture.md).
 
@@ -92,7 +92,9 @@ channel ID `-1001596367704`. It publishes to the original bot queue
 `tg_bot_channel_update` on a local broker with confirms and a 60-second TTL.
 The app validates the envelope/source time and logs `Signal parsed: ... result={...}`
 for the base USDT Futures format. Other messages log a skip/rejection reason.
-Messages are acknowledged; client selection and trade execution are not implemented yet.
+Messages are acknowledged after context logging; job publication and trade execution are not implemented yet.
+The configured databases must contain the channel, connected BingX accounts and active
+auto-trading subscriptions. Otherwise the workflow logs its skip reason.
 `CLIENT_TRADE_WORKER_QUEUES` describes the later BingX client-job boundary and is
 not the queue selected by `Infrastructure::for_telegram_intake`.
 

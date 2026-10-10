@@ -1469,6 +1469,21 @@ async fn binary_logs_raw_telegram_signal_and_acknowledges() {
     use std::io::{BufRead, BufReader};
     let broker = Broker::start().await;
     let stores = Stores::start(&broker.directory).await;
+    let mongo = mongodb::Client::with_uri_str(format!("mongodb://127.0.0.1:{}", stores.mongo_port))
+        .await
+        .unwrap();
+    let bot = mongo.database("bot");
+    bot.collection::<mongodb::bson::Document>("mcr_channels")
+        .insert_one(mongodb::bson::doc! {"id":-1001596367704_i64})
+        .await
+        .unwrap();
+    bot.collection::<mongodb::bson::Document>("tradingprofiles").insert_one(mongodb::bson::doc! {
+        "userId":42.0, "exchangeClients":[{"clientId":"integration-account", "provider":"BingX", "connectedChannel":-1001596367704_f64,
+        "api_key":"must-not-log-api-key", "api_secret":"must-not-log-api-secret"}]
+    }).await.unwrap();
+    mongo.database("accounts").collection::<mongodb::bson::Document>("users").insert_one(mongodb::bson::doc! {
+        "tg_chat_id":42.0, "auto_trading":true, "valid_till":mongodb::bson::DateTime::from_millis(mongodb::bson::DateTime::now().timestamp_millis()+60000)
+    }).await.unwrap();
     struct Process(Child);
     impl Drop for Process {
         fn drop(&mut self) {
@@ -1565,6 +1580,16 @@ async fn binary_logs_raw_telegram_signal_and_acknowledges() {
     assert_eq!(result["sell_targets"], json!(["0.26", "0.27", "0.28"]));
     assert_eq!(result["stop_loss"], "0.18");
     assert_eq!(result["leverage"], "3x");
+    let context_log = timeout(Duration::from_secs(3), lines.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(context_log.starts_with("Channel context ready:"));
+    assert!(context_log.contains("eligible_accounts=1 eligible_users=1"));
+    for log in [&line, &parsed, &context_log] {
+        assert!(!log.contains("must-not-log"));
+        assert!(!log.contains("integration-account"));
+    }
     for (body, expected) in [
         (br#"{"text":"private-payload-without-envelope"}"#.to_vec(), "Telegram intake rejected: InvalidEnvelope"),
         (serde_json::to_vec(&json!({"message_id":8,"date":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),"chat":{"id":-1001596367704i64,"type":"channel"}})).unwrap(), "Telegram intake skipped: NoText"),

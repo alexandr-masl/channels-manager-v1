@@ -470,3 +470,73 @@ async fn invalid_driver_options_are_redacted() {
     assert!(!format!("{error:?}").contains("private"));
     mongo.close().await.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "starts isolated mongod; requires loopback access"]
+async fn channel_context_queries_match_original_collections_and_projections() {
+    let (server, admin) = Server::start().await;
+    let config = server.config();
+    let mut mongo = MongoConnections::new(config.mongo, config.runtime.operation_timeout);
+    mongo.connect().await.unwrap();
+    let bot = admin.database("bot");
+    bot.collection::<Document>(CHANNELS_COLLECTION)
+        .insert_one(doc! {"id":-100.0,"strategy":"basic"})
+        .await
+        .unwrap();
+    bot.collection::<Document>(TRADING_PROFILES_COLLECTION).insert_many([
+        doc! {"userId":42.0,"unrelated":"omit","exchangeClients":[{"connectedChannel":-100.0,"clientId":"a","provider":"BingX","api_key":"key","api_secret":"secret","unrelated":"omit"}]},
+        doc! {"userId":43.0,"exchangeClients":[{"connectedChannel":-200.0}]},
+    ]).await.unwrap();
+    bot.collection::<Document>(USER_CONFIGS_COLLECTION).insert_many([
+        doc! {"user":42.0,"private_channels":[{"id":-100.0,"own_settings":true}],"lastNotifications":["omit"]},
+        doc! {"user":43.0},
+    ]).await.unwrap();
+    let repositories = mongo.repositories().unwrap();
+    assert!(
+        repositories
+            .channels
+            .get_channel(-200)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        repositories
+            .channels
+            .get_channel(-100)
+            .await
+            .unwrap()
+            .unwrap()
+            .get_str("strategy"),
+        Ok("basic")
+    );
+    let profiles = repositories
+        .channels
+        .get_profiles_by_channel(-100)
+        .await
+        .unwrap();
+    assert_eq!(profiles.len(), 1);
+    assert!(!profiles[0].contains_key("unrelated"));
+    let account = profiles[0].get_array("exchangeClients").unwrap()[0]
+        .as_document()
+        .unwrap();
+    assert_eq!(account.get_str("api_secret"), Ok("secret"));
+    assert!(!account.contains_key("unrelated"));
+    let configs = repositories
+        .channels
+        .get_configs_by_users(&[42])
+        .await
+        .unwrap();
+    assert_eq!(configs.len(), 1);
+    assert!(configs[0].contains_key("private_channels"));
+    assert!(!configs[0].contains_key("lastNotifications"));
+    assert!(
+        repositories
+            .channels
+            .get_configs_by_users(&[])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    mongo.close().await.unwrap();
+}

@@ -12,6 +12,8 @@ pub const EXECUTION_CLEANUP_DEADLINE: Duration = Duration::from_secs(2);
 
 pub const CLAIMS_COLLECTION: &str = "bingx_futures_execution_claims";
 pub const USER_CONFIGS_COLLECTION: &str = "user_configs";
+pub const CHANNELS_COLLECTION: &str = "mcr_channels";
+pub const TRADING_PROFILES_COLLECTION: &str = "tradingprofiles";
 pub const ACTIVE_TRADES_COLLECTION: &str = "trade_station_active_trades";
 pub const ACCOUNTS_COLLECTION: &str = "users";
 pub const CLAIMS_INDEX: &str = "uq_bingx_futures_execution_claim_work_id";

@@ -4,9 +4,10 @@
 
 Keep this document current as implementation decisions change. The TypeScript
 `satoshi-channel-updates-manager` remains the behavioral source of truth.
-Implemented through issue #2 slice 2: typed Telegram intake validates structure
-and source time, parses base USDT Futures signals, logs results or skip/rejection
-reasons, and acknowledges. Channel authorization and job fan-out remain planned.
+Implemented through slice 3: Telegram intake validates structure and source time,
+authorizes the channel, parses USDT Futures signals, selects eligible BingX accounts
+and loads user settings. It logs context or skip/rejection reasons and acknowledges.
+Job preparation and fan-out remain planned.
 The workflows below extend the initial client-job migration to include signal intake.
 
 ## Workflows
@@ -40,7 +41,7 @@ This lets intake and account execution scale independently.
 | Module | Responsibility |
 | --- | --- |
 | `main.rs`, `infrastructure.rs` | Configuration, dependency wiring, worker lifecycle |
-| `telegram/{message,handler,workflow}.rs` | Telegram envelope, delivery settlement, channel validation and client fan-out |
+| `telegram/{message,handler,workflow,channel_update,context}.rs` | Telegram envelope, delivery settlement, channel validation and client fan-out |
 | `signals/{model,parser,validation,settings}.rs` | Typed signals, pure text parsing, consistency checks, effective settings |
 | `trading/{job_handler,execution}.rs` | Job delivery, claims, leases, deadlines and terminal outcomes |
 | `exchanges/bingx/{client,admission,trade_builder,workflow}.rs` | HTTP/auth, account checks, trade calculations and BingX orchestration |
@@ -113,8 +114,8 @@ and chat IDs nonzero. Allow additional Telegram fields. Accept source timestamps
 up to 10 minutes old or 2 minutes ahead, inclusive, using existing contract limits.
 Skip non-channel messages, replies and absent/blank text. Reject malformed
 payloads or invalid timestamps without logging their contents. Accepted text is
-escaped for terminal output. Envelope validation does not imply channel authorization. The parser validates
-the supported signal format before logging its result; database checks follow.
+escaped for terminal output. Envelope validation does not imply channel authorization;
+`ChannelUpdateManager` performs that check before parsing.
 
 
 ## Signal parsing (slice 2)
@@ -144,9 +145,9 @@ targets, preserving their order. Optional `POSITION SIZE 0.5%` becomes
 position size stays absent. Missing required values are never inferred.
 Decimal strings and leverage notation retain TypeScript wire compatibility.
 
-`TelegramHandler` logs `Signal parsed: ... result=<JSON>` or a concise
-`Signal skipped`/`Signal rejected` reason before acknowledgement. No database
-eligibility checks, fan-out or trading actions run in this slice.
+`TelegramHandler` logs `Signal parsed: ... result=<JSON>` and the context summary
+when eligible accounts exist. Other outcomes log a static skip/rejection reason.
+Job fan-out and trading actions are not implemented yet.
 
 ### Compatibility trace (2026-10-04)
 
@@ -170,3 +171,33 @@ Remaining differences to migrate explicitly:
 
 The parser is a supported subset, not full TypeScript parity. Regression tests
 must include source-app examples as well as generated Rust-format cases.
+
+
+## Channel update workflow (slice 3)
+
+`telegram/channel_update.rs::ChannelUpdateManager` is the Rust equivalent of
+TypeScript `MessageManager.handleChannelUpdate`. `ChannelRepository` is its test
+seam; `MongoRepositories` supplies the real adapter. `main.rs` stays wiring only.
+
+1. Look up `mcr_channels.id` in Bot MongoDB; a missing channel is unauthorized.
+2. Parse with the existing signal parser; stop on non-signals or invalid signals.
+3. Query `tradingprofiles` by `exchangeClients.connectedChannel`, then select
+   matching BingX clients. Read only the original projected account fields.
+4. Batch unique user IDs through Account Validator `users`; require
+   `auto_trading: true` and `valid_till` strictly later than the workflow clock.
+5. Load `user_configs` for eligible users. Preserve the original config and its
+   matching `private_channels` entry, including `own_settings`; effective trading
+   settings are resolved in the later execution slice.
+6. Return `ChannelContext` with the original message identity/time, parsed signal,
+   channel settings and eligible clients. Missing optional user settings are allowed.
+
+Outcomes: `Ready`, `Skipped` (unauthorized, non-signal, no connected/eligible
+accounts), `Rejected` (invalid signal/context), or a Mongo dependency error.
+The handler logs only parsed signal data, IDs, eligible counts and static reasons.
+Contexts and clients have no Debug/Serialize implementation because they contain
+credentials. Mongo errors use the existing bounded retry/dead-letter policy;
+lookup failures never become empty results. Ready/skip/reject are acknowledged.
+
+Local signal tests now require an existing channel, a connected BingX account and
+an active auto-trading subscription in the configured databases. Without those,
+expect a skip log. No external account calls or trade/job publication occur yet.

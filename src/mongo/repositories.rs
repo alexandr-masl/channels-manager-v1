@@ -13,6 +13,7 @@ pub struct MongoRepositories {
     pub trades: TradeRepository,
     pub notifications: NotificationRepository,
     pub accounts: AccountRepository,
+    pub channels: ChannelRepository,
 }
 impl MongoRepositories {
     pub(super) fn new(
@@ -22,6 +23,12 @@ impl MongoRepositories {
         timeout: Duration,
     ) -> Self {
         Self {
+            channels: ChannelRepository {
+                channels: bot.collection(CHANNELS_COLLECTION),
+                profiles: bot.collection(TRADING_PROFILES_COLLECTION),
+                configs: bot.collection(USER_CONFIGS_COLLECTION),
+                timeout,
+            },
             claims: ClaimStore::new(bot),
             trades: TradeRepository {
                 collection: trading.collection(ACTIVE_TRADES_COLLECTION),
@@ -125,5 +132,75 @@ impl AccountRepository {
                 .await
         })
         .await
+    }
+}
+
+#[derive(Clone)]
+pub struct ChannelRepository {
+    channels: Collection<Document>,
+    profiles: Collection<Document>,
+    configs: Collection<Document>,
+    timeout: Duration,
+}
+impl ChannelRepository {
+    pub async fn get_channel(&self, channel_id: i64) -> Result<Option<Document>, MongoError> {
+        bounded(MongoRole::Bot, self.timeout, async {
+            self.channels
+                .find_one(doc! {"id": channel_id})
+                .max_time(self.timeout)
+                .await
+        })
+        .await
+    }
+    pub async fn get_profiles_by_channel(
+        &self,
+        channel_id: i64,
+    ) -> Result<Vec<Document>, MongoError> {
+        bounded(MongoRole::Bot, self.timeout, async {
+            self.profiles.find(doc! {"exchangeClients.connectedChannel":channel_id})
+                .projection(doc! {"userId":1,"exchangeClients.clientId":1,"exchangeClients.provider":1,"exchangeClients.name":1,"exchangeClients.api_key":1,"exchangeClients.api_secret":1,"exchangeClients.connectedChannel":1})
+                .max_time(self.timeout).await?.try_collect().await
+        }).await
+    }
+    pub async fn get_configs_by_users(&self, users: &[i64]) -> Result<Vec<Document>, MongoError> {
+        if users.is_empty() {
+            return Ok(vec![]);
+        }
+        bounded(MongoRole::Bot, self.timeout, async {
+            self.configs
+                .find(doc! {"user":{"$in":users}})
+                .projection(doc! {"user":1,"private_channels":1})
+                .max_time(self.timeout)
+                .await?
+                .try_collect()
+                .await
+        })
+        .await
+    }
+}
+impl crate::telegram::ChannelRepository for MongoRepositories {
+    fn channel(
+        &self,
+        id: i64,
+    ) -> futures_util::future::BoxFuture<'_, Result<Option<Document>, MongoError>> {
+        Box::pin(self.channels.get_channel(id))
+    }
+    fn profiles(
+        &self,
+        id: i64,
+    ) -> futures_util::future::BoxFuture<'_, Result<Vec<Document>, MongoError>> {
+        Box::pin(self.channels.get_profiles_by_channel(id))
+    }
+    fn accounts(
+        &self,
+        ids: Vec<i64>,
+    ) -> futures_util::future::BoxFuture<'_, Result<Vec<Document>, MongoError>> {
+        Box::pin(async move { self.accounts.get_auto_trading_accounts(&ids).await })
+    }
+    fn configs(
+        &self,
+        ids: Vec<i64>,
+    ) -> futures_util::future::BoxFuture<'_, Result<Vec<Document>, MongoError>> {
+        Box::pin(async move { self.channels.get_configs_by_users(&ids).await })
     }
 }

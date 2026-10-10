@@ -8,5 +8,6 @@ pub use claims::{ClaimInput, ClaimOutcome, ClaimStore};
 pub use connections::{MongoConnections, MongoRole};
 pub use error::{MongoError, MongoErrorKind};
 pub use repositories::{
-    AccountRepository, MongoRepositories, NotificationRepository, TradeRepository,
+    AccountRepository, ChannelRepository, MongoRepositories, NotificationRepository,
+    TradeRepository,
 };
