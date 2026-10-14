@@ -4,6 +4,7 @@ use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsError {
+    InvalidLeverage,
     MissingSettings,
     InvalidPosition,
     InvalidTargets,
@@ -178,4 +179,52 @@ fn truthy(value: &Value) -> bool {
         Value::Number(n) => n.as_f64() != Some(0.0),
         _ => true,
     }
+}
+
+/// Resolve omitted leverage per client before serializing the worker contract.
+/// An explicitly invalid value is never replaced by a lower-priority default.
+pub(super) fn resolve_leverage(job: &ClientTradeJob) -> Result<String, SettingsError> {
+    let parse = |value: &Value| -> Result<String, SettingsError> {
+        let raw = match value {
+            Value::String(s) => s.clone(),
+            Value::Number(n) => n.to_string(),
+            _ => return Err(SettingsError::InvalidLeverage),
+        };
+        let n = super::validation::positive_decimal(raw.strip_suffix(['x', 'X']).unwrap_or(&raw))
+            .map_err(|_| SettingsError::InvalidLeverage)?;
+        if n.fract() != 0.0 || n > u32::MAX as f64 {
+            return Err(SettingsError::InvalidLeverage);
+        }
+        Ok(raw)
+    };
+    if let Some(value) = job.signal_data.get("leverage") {
+        return parse(value);
+    }
+    let channel = &job.channel_settings["futures"];
+    let mut selected = if channel["active"] == true {
+        channel.get("leverage")
+    } else {
+        None
+    };
+    if let Some(user) = job.user_config.as_ref().filter(|v| !v.is_null()) {
+        if !user.is_object() || numeric_id(&user["user"]) != numeric_id(&job.client["chatId"]) {
+            return Err(SettingsError::InvalidUserConfig);
+        }
+        if let Some(channels) = user.get("private_channels") {
+            let channels = channels
+                .as_array()
+                .ok_or(SettingsError::InvalidUserConfig)?;
+            if let Some(settings) = channels
+                .iter()
+                .find(|ch| numeric_id(&ch["id"]) == Some(job.channel_id))
+                && settings.get("own_settings").is_some_and(truthy)
+                && settings["futures"]["active"] == true
+                && let Some(value) = settings["futures"].get("leverage")
+            {
+                selected = Some(value);
+            }
+        }
+    }
+    let raw = parse(selected.ok_or(SettingsError::InvalidLeverage)?)?;
+    Ok(format!("{}x", raw.strip_suffix(['x', 'X']).unwrap_or(&raw)))
 }

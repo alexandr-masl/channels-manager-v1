@@ -304,3 +304,12 @@ explicitly enable the full BingX flow; Kubernetes starts one replica and KEDA tr
 both queues. Worker-only role/trigger changes, exclusive ownership and digest-based
 rollback are in [verification and rollout](verification-and-rollout.md).
 Live acceptance and cluster changes are not performed by this slice.
+
+## Optional signal leverage
+
+Telegram parsing preserves omitted leverage. Job preparation resolves a separate
+value per client: explicit signal, active owned user channel Futures override,
+then active channel `futures.leverage`. Explicit invalid values never fall back.
+Invalid/missing configuration skips only that client; if all clients are rejected,
+no jobs or acceptance reply are published. Every published worker job still has
+resolved leverage. See [workflow E2E](signal-workflow-e2e-design.md).

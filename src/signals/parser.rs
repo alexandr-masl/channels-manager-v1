@@ -208,7 +208,7 @@ fn parse(lines: &[Vec<&str>]) -> Result<TradingSignal, SignalError> {
         buy_targets: entries.ok_or(SignalError::MissingField)?,
         sell_targets: targets,
         stop_loss: stop.ok_or(SignalError::MissingField)?,
-        leverage: leverage.ok_or(SignalError::MissingField)?,
+        leverage,
         position,
         breakout_entry,
     };

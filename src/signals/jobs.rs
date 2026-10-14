@@ -15,7 +15,7 @@ pub(super) fn build_jobs(
 ) -> Result<Vec<ClientTradeJob>, PreparationError> {
     let signal =
         serde_json::to_value(&context.signal).map_err(|_| PreparationError::InvalidContext)?;
-    let channel_settings = document_json(&context.channel_settings)?;
+    let channel_settings = settings_json(&context.channel_settings)?;
     let source = iso_time(
         i64::try_from(context.message.source_created_at_ms())
             .map_err(|_| PreparationError::InvalidContext)?,
@@ -25,19 +25,73 @@ pub(super) fn build_jobs(
         let user = numeric_id(trade.get("chat_id")).ok_or(PreparationError::InvalidContext)?;
         trades.entry(user).or_default().push(document_json(trade)?);
     }
-    context.clients.iter().map(|client| {
-        if client.client_id.trim().is_empty() || client.key.trim().is_empty() || client.key_secret.trim().is_empty() || client.chat_id<=0 {return Err(PreparationError::InvalidContext);}
-        let identity=TradeIdentity {channel_id:context.message.channel_id(),message_id:context.message.message_id(),chat_id:client.chat_id,client_id:&client.client_id,symbol:&context.signal.symbol};
-        let mut data=json!({"chatId":client.chat_id,"clientId":client.client_id,"provider":"BingX","key":client.key,"keySecret":client.key_secret});
-        if let Some(name)=&client.name { data["name"]=json!(name); }
-        Ok(ClientTradeJob {
-            job_type:JobType::CreateTrade,version:JobVersion::V1,channel_id:context.message.channel_id(),message_id:context.message.message_id(),
-            source_created_at:Some(source.clone()),trade_expires_at:Some(expires_at),signal_data:signal.clone(),channel_settings:channel_settings.clone(),
-            client:data,user_config:client.user_config.as_ref().map(document_json).transpose()?,market_data:snapshot.clone(),
-            opened_trades:trades.get(&client.chat_id).cloned().unwrap_or_default(),idempotency_key:identity.idempotency_key(),partition_key:identity.partition_key(),
-            provider:Provider::BingX,market:Market::Futures,symbol:context.signal.symbol.clone(),
-        })
-    }).collect()
+    let mut jobs = Vec::new();
+    for client in &context.clients {
+        if client.client_id.trim().is_empty()
+            || client.key.trim().is_empty()
+            || client.key_secret.trim().is_empty()
+            || client.chat_id <= 0
+        {
+            return Err(PreparationError::InvalidContext);
+        }
+        let identity = TradeIdentity {
+            channel_id: context.message.channel_id(),
+            message_id: context.message.message_id(),
+            chat_id: client.chat_id,
+            client_id: &client.client_id,
+            symbol: &context.signal.symbol,
+        };
+        let mut data = json!({
+            "chatId": client.chat_id, "clientId": client.client_id,
+            "provider": "BingX", "key": client.key, "keySecret": client.key_secret
+        });
+        if let Some(name) = &client.name {
+            data["name"] = json!(name);
+        }
+        let user_config = match client.user_config.as_ref().map(settings_json).transpose() {
+            Ok(value) => value,
+            Err(_) => {
+                println!(
+                    "Signal client rejected: channel_id={} message_id={} reason=InvalidUserConfig",
+                    context.message.channel_id(),
+                    context.message.message_id()
+                );
+                continue;
+            }
+        };
+        let mut job = ClientTradeJob {
+            job_type: JobType::CreateTrade,
+            version: JobVersion::V1,
+            channel_id: context.message.channel_id(),
+            message_id: context.message.message_id(),
+            source_created_at: Some(source.clone()),
+            trade_expires_at: Some(expires_at),
+            signal_data: signal.clone(),
+            channel_settings: channel_settings.clone(),
+            client: data,
+            user_config,
+            market_data: snapshot.clone(),
+            opened_trades: trades.get(&client.chat_id).cloned().unwrap_or_default(),
+            idempotency_key: identity.idempotency_key(),
+            partition_key: identity.partition_key(),
+            provider: Provider::BingX,
+            market: Market::Futures,
+            symbol: context.signal.symbol.clone(),
+        };
+        match super::settings::resolve_leverage(&job) {
+            Ok(value) => job.signal_data["leverage"] = json!(value),
+            Err(reason) => {
+                println!(
+                    "Signal client rejected: channel_id={} message_id={} reason={reason:?}",
+                    context.message.channel_id(),
+                    context.message.message_id()
+                );
+                continue;
+            }
+        }
+        jobs.push(job);
+    }
+    Ok(jobs)
 }
 fn numeric_id(value: Option<&Bson>) -> Option<i64> {
     match value? {
@@ -50,6 +104,29 @@ fn numeric_id(value: Option<&Bson>) -> Option<i64> {
         }
         _ => None,
     }
+}
+/// Preserve an invalid leverage candidate as null when BSON cannot express it in
+/// JSON. It must reject if selected, but must not defeat a valid higher priority.
+fn settings_json(doc: &Document) -> Result<Value, PreparationError> {
+    fn normalize(settings: &mut Document) {
+        if let Ok(futures) = settings.get_document_mut("futures")
+            && futures
+                .get("leverage")
+                .is_some_and(|value| bson_json(value).is_err())
+        {
+            futures.insert("leverage", Bson::Null);
+        }
+    }
+    let mut settings = doc.clone();
+    normalize(&mut settings);
+    if let Ok(channels) = settings.get_array_mut("private_channels") {
+        for channel in channels {
+            if let Bson::Document(channel) = channel {
+                normalize(channel);
+            }
+        }
+    }
+    document_json(&settings)
 }
 fn document_json(doc: &Document) -> Result<Value, PreparationError> {
     doc.iter()

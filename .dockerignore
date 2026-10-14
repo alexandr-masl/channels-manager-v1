@@ -2,5 +2,6 @@
 !Dockerfile
 !Cargo.toml
 !Cargo.lock
+!USAGE-NOTICE.md
 !src/
 !src/**

@@ -252,3 +252,188 @@ async fn invalid_context_and_clock_do_not_create_jobs() {
         PreparationOutcome::Rejected(_)
     ));
 }
+
+#[tokio::test]
+async fn missing_leverage_resolves_per_client_without_changing_shared_signal() {
+    let (trades, market, mut context) = fixtures();
+    let text = "BTCUSDT SHORT\nENTRY 84550\nTG1 83595\nSL 86347";
+    let ParseOutcome::Parsed(signal) = parse_signal(text) else {
+        panic!("omitted leverage must parse")
+    };
+    assert!(
+        serde_json::to_value(&signal)
+            .unwrap()
+            .get("leverage")
+            .is_none()
+    );
+    context.signal = signal;
+    context
+        .channel_settings
+        .insert("futures", doc! {"active":true,"leverage":3});
+    context.clients[0].user_config = Some(
+        doc! {"user":42,"private_channels":[{"id":-100,"own_settings":true,"futures":{"active":true,"leverage":7}}]},
+    );
+    let PreparationOutcome::Prepared(batch) = SignalManager::new(&trades, &market)
+        .prepare(context, || NOW)
+        .await
+        .unwrap()
+    else {
+        panic!("prepared")
+    };
+    assert_eq!(
+        batch
+            .jobs
+            .iter()
+            .map(|j| j.signal_data["leverage"].clone())
+            .collect::<Vec<_>>(),
+        vec![json!("7x"), json!("3x"), json!("3x")]
+    );
+}
+
+#[tokio::test]
+async fn leverage_precedence_and_invalid_values_do_not_silently_fall_back() {
+    use mongodb::bson::Bson;
+    for (explicit, own, active, user_id, user_value, channel_active, expected) in [
+        (true, true, true, 42, Bson::Null, true, Some("5x")),
+        (false, true, true, 42, Bson::Int32(7), true, Some("7x")),
+        (false, false, true, 42, Bson::Int32(7), true, Some("3x")),
+        (false, true, false, 42, Bson::Int32(7), true, Some("3x")),
+        (false, true, true, 99, Bson::Int32(7), true, None),
+        (false, true, true, 42, Bson::Int32(7), false, Some("7x")),
+        (false, false, false, 42, Bson::Int32(7), false, None),
+        (false, true, true, 42, Bson::Null, true, None),
+        (false, true, true, 42, Bson::Boolean(true), true, None),
+        (false, true, true, 42, Bson::Int32(0), true, None),
+        (false, true, true, 42, Bson::Int32(-1), true, None),
+        (false, true, true, 42, Bson::Double(2.5), true, None),
+        (
+            false,
+            true,
+            true,
+            42,
+            Bson::String("3xx".into()),
+            true,
+            None,
+        ),
+        (
+            false,
+            true,
+            true,
+            42,
+            Bson::String("4X".into()),
+            true,
+            Some("4x"),
+        ),
+    ] {
+        let (trades, market, mut context) = fixtures();
+        if !explicit {
+            context.signal.leverage = None;
+        }
+        context.clients.truncate(1);
+        context
+            .channel_settings
+            .insert("futures", doc! {"active":channel_active,"leverage":3});
+        context.clients[0].user_config = Some(
+            doc! {"user":user_id,"private_channels":[{"id":-100,"own_settings":own,"futures":{"active":active,"leverage":user_value}}]},
+        );
+        let outcome = SignalManager::new(&trades, &market)
+            .prepare(context, || NOW)
+            .await
+            .unwrap();
+        match (outcome, expected) {
+            (PreparationOutcome::Prepared(batch), Some(value)) => {
+                assert_eq!(batch.jobs[0].signal_data["leverage"], value)
+            }
+            (PreparationOutcome::Rejected(_), None) => (),
+            _ => panic!("unexpected leverage resolution"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn bad_fallback_skips_only_affected_client_and_missing_fallback_rejects() {
+    let (trades, market, mut context) = fixtures();
+    context.signal.leverage = None;
+    context
+        .channel_settings
+        .insert("futures", doc! {"active":true,"leverage":3});
+    context.clients[0].user_config = Some(
+        doc! {"user":42,"private_channels":[{"id":-100,"own_settings":true,"futures":{"active":true,"leverage":0}}]},
+    );
+    let PreparationOutcome::Prepared(batch) = SignalManager::new(&trades, &market)
+        .prepare(context, || NOW)
+        .await
+        .unwrap()
+    else {
+        panic!("valid clients must survive")
+    };
+    assert_eq!(batch.jobs.len(), 2);
+    assert!(batch.jobs.iter().all(|j| j.signal_data["leverage"] == "3x"));
+    assert_eq!(batch.jobs[0].client["clientId"], "b");
+    let (trades, market, mut context) = fixtures();
+    context.signal.leverage = None;
+    assert!(matches!(
+        SignalManager::new(&trades, &market)
+            .prepare(context, || NOW)
+            .await
+            .unwrap(),
+        PreparationOutcome::Rejected(_)
+    ));
+}
+
+#[tokio::test]
+async fn invalid_explicit_leverage_is_not_replaced_by_configuration() {
+    let (trades, market, mut context) = fixtures();
+    context.signal.leverage = Some("2.5x".into());
+    context
+        .channel_settings
+        .insert("futures", doc! {"active":true,"leverage":3});
+    assert!(matches!(
+        SignalManager::new(&trades, &market)
+            .prepare(context, || NOW)
+            .await
+            .unwrap(),
+        PreparationOutcome::Rejected(_)
+    ));
+}
+
+#[tokio::test]
+async fn non_json_user_leverage_rejects_only_that_client() {
+    let (trades, market, mut context) = fixtures();
+    context.signal.leverage = None;
+    context
+        .channel_settings
+        .insert("futures", doc! {"active":true,"leverage":3});
+    context.clients[0].user_config = Some(
+        doc! {"user":42,"private_channels":[{"id":-100,"own_settings":true,"futures":{"active":true,"leverage":f64::NAN}}]},
+    );
+    let PreparationOutcome::Prepared(batch) = SignalManager::new(&trades, &market)
+        .prepare(context, || NOW)
+        .await
+        .unwrap()
+    else {
+        panic!("valid clients must survive non-JSON settings")
+    };
+    assert_eq!(batch.jobs.len(), 2);
+}
+
+#[tokio::test]
+async fn invalid_bson_channel_leverage_does_not_override_valid_user_value() {
+    let (trades, market, mut context) = fixtures();
+    context.signal.leverage = None;
+    context
+        .channel_settings
+        .insert("futures", doc! {"active":true,"leverage":f64::INFINITY});
+    context.clients[0].user_config = Some(
+        doc! {"user":42,"private_channels":[{"id":-100,"own_settings":true,"futures":{"active":true,"leverage":7}}]},
+    );
+    let PreparationOutcome::Prepared(batch) = SignalManager::new(&trades, &market)
+        .prepare(context, || NOW)
+        .await
+        .unwrap()
+    else {
+        panic!("valid override must survive")
+    };
+    assert_eq!(batch.jobs.len(), 1);
+    assert_eq!(batch.jobs[0].signal_data["leverage"], "7x");
+}

@@ -11,7 +11,8 @@ pub struct TradingSignal {
     pub buy_targets: Vec<String>,
     pub sell_targets: Vec<String>,
     pub stop_loss: String,
-    pub leverage: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leverage: Option<String>,
     /// Optional signal override as a balance fraction (0.5% → 0.005).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<f64>,

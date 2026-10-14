@@ -1,0 +1,9 @@
+services:
+  satoshi-channel-updates-manager:
+    volumes:
+      - type: bind
+        source: ${APP_AUTHORIZATION_FILE:?Export APP_AUTHORIZATION_FILE as an absolute path to the owner-issued authorization file}
+        target: /run/authorization/authorization.json
+        read_only: true
+        bind:
+          create_host_path: false

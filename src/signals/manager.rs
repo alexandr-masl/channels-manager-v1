@@ -24,6 +24,7 @@ pub enum PreparationSkip {
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum PreparationReject {
+    NoValidLeverage,
     UnsupportedSymbol,
     InvalidContext,
 }
@@ -124,6 +125,11 @@ impl<'a, R: OpenTradeRepository + ?Sized, M: MarketDataProvider + ?Sized> Signal
                 ));
             }
         };
+        if jobs.is_empty() {
+            return Ok(PreparationOutcome::Rejected(
+                PreparationReject::NoValidLeverage,
+            ));
+        }
         Ok(PreparationOutcome::Prepared(PreparedSignal {
             summary: PreparationSummary {
                 channel_id: context.message.channel_id(),

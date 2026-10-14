@@ -1,0 +1,56 @@
+{
+  "rfc8032_test1": {
+    "source": "https://www.rfc-editor.org/rfc/rfc8032#section-7.1",
+    "public_key_hex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+    "message_hex": "",
+    "signature_hex": "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b",
+    "expected_signature_valid": true
+  },
+  "authorization_vectors": [
+    {
+      "name": "valid",
+      "payload_utf8": "{\"version\":1,\"key_id\":\"test-rfc8032-01\",\"authorization_id\":\"test-001\",\"authorized_to\":\"Example test customer\",\"services\":[\"channels-manager-v1\"]}",
+      "payload_hex": "7b2276657273696f6e223a312c226b65795f6964223a22746573742d726663383033322d3031222c22617574686f72697a6174696f6e5f6964223a22746573742d303031222c22617574686f72697a65645f746f223a224578616d706c65207465737420637573746f6d6572222c227365727669636573223a5b226368616e6e656c732d6d616e616765722d7631225d7d",
+      "signature_hex": "ff0a137732f7dc6be85f3662505689925b39c9263a946b78371164061fd7976458b9880e3110a72a8223cd7764b4cd4e1ec24ac32ee0be7017ed988cc70e860e",
+      "public_key_hex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+      "envelope": {
+        "key_id": "test-rfc8032-01",
+        "payload": "eyJ2ZXJzaW9uIjoxLCJrZXlfaWQiOiJ0ZXN0LXJmYzgwMzItMDEiLCJhdXRob3JpemF0aW9uX2lkIjoidGVzdC0wMDEiLCJhdXRob3JpemVkX3RvIjoiRXhhbXBsZSB0ZXN0IGN1c3RvbWVyIiwic2VydmljZXMiOlsiY2hhbm5lbHMtbWFuYWdlci12MSJdfQ",
+        "signature": "_woTdzL33GvoXzZiUFaJkls5ySY6lGt4NxFkBh_Xl2RYuYgOMRCnKoIjzXdktM1OHsJKwy7gvnAX7ZiMxw6GDg"
+      },
+      "expected_signature_valid": true,
+      "expected_service_allowed": true,
+      "expected_authorized": true
+    },
+    {
+      "name": "tampered-payload",
+      "payload_utf8": "{\"version\":1,\"key_id\":\"test-rfc8032-01\",\"authorization_id\":\"test-001\",\"authorized_to\":\"Tampered test customer\",\"services\":[\"channels-manager-v1\"]}",
+      "payload_hex": "7b2276657273696f6e223a312c226b65795f6964223a22746573742d726663383033322d3031222c22617574686f72697a6174696f6e5f6964223a22746573742d303031222c22617574686f72697a65645f746f223a2254616d7065726564207465737420637573746f6d6572222c227365727669636573223a5b226368616e6e656c732d6d616e616765722d7631225d7d",
+      "signature_hex": "ff0a137732f7dc6be85f3662505689925b39c9263a946b78371164061fd7976458b9880e3110a72a8223cd7764b4cd4e1ec24ac32ee0be7017ed988cc70e860e",
+      "public_key_hex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+      "envelope": {
+        "key_id": "test-rfc8032-01",
+        "payload": "eyJ2ZXJzaW9uIjoxLCJrZXlfaWQiOiJ0ZXN0LXJmYzgwMzItMDEiLCJhdXRob3JpemF0aW9uX2lkIjoidGVzdC0wMDEiLCJhdXRob3JpemVkX3RvIjoiVGFtcGVyZWQgdGVzdCBjdXN0b21lciIsInNlcnZpY2VzIjpbImNoYW5uZWxzLW1hbmFnZXItdjEiXX0",
+        "signature": "_woTdzL33GvoXzZiUFaJkls5ySY6lGt4NxFkBh_Xl2RYuYgOMRCnKoIjzXdktM1OHsJKwy7gvnAX7ZiMxw6GDg"
+      },
+      "expected_signature_valid": false,
+      "expected_service_allowed": true,
+      "expected_authorized": false
+    },
+    {
+      "name": "wrong-service",
+      "payload_utf8": "{\"version\":1,\"key_id\":\"test-rfc8032-01\",\"authorization_id\":\"test-001\",\"authorized_to\":\"Example test customer\",\"services\":[\"trading-station-v1\"]}",
+      "payload_hex": "7b2276657273696f6e223a312c226b65795f6964223a22746573742d726663383033322d3031222c22617574686f72697a6174696f6e5f6964223a22746573742d303031222c22617574686f72697a65645f746f223a224578616d706c65207465737420637573746f6d6572222c227365727669636573223a5b2274726164696e672d73746174696f6e2d7631225d7d",
+      "signature_hex": "51c9bac9766c4f4fedc3890f543613eba5d94afc4044dd79b190a9b4dc7b6b4a5eb69b24b89ebb4f06574bee957382f275eb4877ee26bc0233738bc783e45501",
+      "public_key_hex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+      "envelope": {
+        "key_id": "test-rfc8032-01",
+        "payload": "eyJ2ZXJzaW9uIjoxLCJrZXlfaWQiOiJ0ZXN0LXJmYzgwMzItMDEiLCJhdXRob3JpemF0aW9uX2lkIjoidGVzdC0wMDEiLCJhdXRob3JpemVkX3RvIjoiRXhhbXBsZSB0ZXN0IGN1c3RvbWVyIiwic2VydmljZXMiOlsidHJhZGluZy1zdGF0aW9uLXYxIl19",
+        "signature": "Ucm6yXZsT0_tw4kPVDYT66XZSvxARN15sZCptNx7a0petpskuJ67TwZXS-6Vc4LydetId-4mvAIzc4vHg-RVAQ"
+      },
+      "expected_signature_valid": true,
+      "expected_service_allowed": false,
+      "expected_authorized": false
+    }
+  ]
+}

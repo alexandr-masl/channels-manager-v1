@@ -13,6 +13,7 @@ RUN cargo build --locked --release --bin channels-manager-v1 \
 FROM gcr.io/distroless/cc-debian13:nonroot@sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97 AS runtime
 WORKDIR /app
 COPY --from=build --chmod=0555 /app/target/release/channels-manager-v1 /app/channels-manager-v1
+COPY --chmod=0444 USAGE-NOTICE.md /app/USAGE-NOTICE.md
 USER 65532:65532
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/app/channels-manager-v1"]

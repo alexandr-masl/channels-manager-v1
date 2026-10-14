@@ -13,6 +13,8 @@ codegen-units = 1
 panic = "unwind"
 
 [dependencies]
+base64 = "0.22.1"
+ed25519-dalek = { version = "3", default-features = false }
 hmac = "0.12"
 async-compat = "0.2.6"
 dotenvy = "0.15.7"
@@ -32,3 +34,6 @@ uuid = { version = "1.26.1", features = ["v4"] }
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["test-util"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

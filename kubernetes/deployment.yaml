@@ -5,7 +5,7 @@ metadata:
   labels:
     io.kompose.service: satoshi-channel-updates-manager
 spec:
-  replicas: 1
+  replicas: 2
   # Stop the old consumer pods before starting the replacement implementation.
   strategy:
     type: Recreate
@@ -19,10 +19,25 @@ spec:
         io.kompose.service: satoshi-channel-updates-manager
     spec:
       terminationGracePeriodSeconds: 45
+      securityContext:
+        fsGroup: 65532
+      volumes:
+        - name: application-authorization
+          secret:
+            secretName: channels-manager-authorization
+            optional: true
+            defaultMode: 0440
+            items:
+              - key: authorization.json
+                path: authorization.json
       containers:
         - name: satoshi-channel-updates-manager
           image: kolobobolobo/satoshi-channels-updates:latest
           imagePullPolicy: Always
+          volumeMounts:
+            - name: application-authorization
+              mountPath: /run/authorization
+              readOnly: true
           securityContext:
             runAsNonRoot: true
             runAsUser: 65532
@@ -42,6 +57,11 @@ spec:
             # in another workload. Client-job publication/worker are always active.
             - name: TELEGRAM_INTAKE_ENABLED
               value: "true"
+            - name: SATOSHI_TG_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mcr-tg-client-secrets
+                  key: SATOSHI_TG_TOKEN
             - name: CLIENT_TRADE_WORKER_PREFETCH
               value: "2"
             - name: STATIC_LOW_BALANCE_FALLBACK_RATIO_FUTURES

@@ -1,3 +1,17 @@
+#[path = "../src/authorization/mod.rs"]
+mod authorization;
+#[path = "support/authorization_process.rs"]
+mod authorization_process;
+#[path = "../src/startup.rs"]
+mod startup;
+
+#[test]
+fn authorization_runtime_child() {
+    authorization_process::run_child();
+}
+
+#[path = "support/services.rs"]
+mod services;
 use channels_manager_v1::{
     config::AppConfig,
     contracts::{
@@ -13,106 +27,18 @@ use channels_manager_v1::{
 };
 use lapin::{BasicProperties, Connection, ConnectionProperties, options::*, types::FieldTable};
 use serde_json::json;
+use services::{Broker, Stores};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::{
-    path::PathBuf,
     process::{Child, Command, Stdio},
     time::Duration,
 };
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-struct Stores {
-    mongo: Child,
-    redis: Child,
-    mongo_port: u16,
-    redis_port: u16,
-}
-impl Drop for Stores {
-    fn drop(&mut self) {
-        let _ = self.mongo.kill();
-        let _ = self.mongo.wait();
-        let _ = self.redis.kill();
-        let _ = self.redis.wait();
-    }
-}
-impl Stores {
-    async fn start(directory: &std::path::Path) -> Self {
-        let mongo_port = free_port();
-        let redis_port = free_port();
-        let path = directory.join("mongo");
-        std::fs::create_dir_all(&path).unwrap();
-        let mongo = Command::new(std::env::var("MONGOD_BIN").unwrap_or_else(|_| "mongod".into()))
-            .args(["--bind_ip", "127.0.0.1", "--port", &mongo_port.to_string()])
-            .arg("--dbpath")
-            .arg(&path)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        let redis = Command::new(
-            std::env::var("REDIS_SERVER_BIN").unwrap_or_else(|_| "redis-server".into()),
-        )
-        .args([
-            "--bind",
-            "127.0.0.1",
-            "--port",
-            &redis_port.to_string(),
-            "--save",
-            "",
-            "--appendonly",
-            "no",
-        ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-        let stores = Self {
-            mongo,
-            redis,
-            mongo_port,
-            redis_port,
-        };
-        timeout(Duration::from_secs(10), async {
-            loop {
-                if tokio::net::TcpStream::connect(("127.0.0.1", mongo_port))
-                    .await
-                    .is_ok()
-                    && tokio::net::TcpStream::connect(("127.0.0.1", redis_port))
-                        .await
-                        .is_ok()
-                {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .unwrap();
-        stores
-    }
-    fn config(&self, broker: &Broker) -> AppConfig {
-        AppConfig::from_lookup(|key| match key {
-            "RABBIT_MQ" => Some(broker.uri()),
-            "REDIS" => Some("127.0.0.1".into()),
-            "REDIS_CLIENT_PORT" => Some(self.redis_port.to_string()),
-            "MONGO_PATH" => Some(format!("mongodb://127.0.0.1:{}/bot", self.mongo_port)),
-            "TRADE_STATION_MONGO_PATH" => {
-                Some(format!("mongodb://127.0.0.1:{}/trading", self.mongo_port))
-            }
-            "ACCOUNT_VALIDATOR_MONGO_PATH" => {
-                Some(format!("mongodb://127.0.0.1:{}/accounts", self.mongo_port))
-            }
-            "STARTUP_RETRY_DELAY_MS" => Some("50".into()),
-            "STARTUP_RETRY_MAX_DELAY_MS" => Some("100".into()),
-            _ => None,
-        })
-        .unwrap()
-    }
-}
 struct Handler {
     active: Arc<AtomicUsize>,
     max: Arc<AtomicUsize>,
@@ -381,124 +307,6 @@ async fn concrete_lifecycle_bounds_workers_and_joins_cleanup() {
     admin.close(200, "OK".into()).await.unwrap();
 }
 
-struct Broker {
-    process: Child,
-    command: Command,
-    directory: PathBuf,
-    port: u16,
-    epmd_port: u16,
-}
-impl Drop for Broker {
-    fn drop(&mut self) {
-        let _ = self.process.kill();
-        let _ = self.process.wait();
-        let _ = Command::new("epmd")
-            .env("ERL_EPMD_PORT", self.epmd_port.to_string())
-            .arg("-kill")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        let _ = std::fs::remove_dir_all(&self.directory);
-    }
-}
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-impl Broker {
-    async fn start() -> Self {
-        let port = free_port();
-        let epmd_port = free_port();
-        let dist_port = free_port();
-        let directory =
-            std::env::temp_dir().join(format!("channels-rabbit-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&directory).unwrap();
-        std::fs::write(
-            directory.join("rabbitmq.conf"),
-            format!("listeners.tcp.1 = 127.0.0.1:{port}\nloopback_users.guest = true\n"),
-        )
-        .unwrap();
-        std::fs::write(directory.join("env.conf"), "").unwrap();
-        std::fs::write(directory.join("plugins"), "[].\n").unwrap();
-        let log = std::fs::File::create(directory.join("startup.log")).unwrap();
-        let mut command = Command::new(
-            std::env::var("RABBITMQ_SERVER_BIN").unwrap_or_else(|_| "rabbitmq-server".into()),
-        );
-        let process = command
-            .env("RABBITMQ_CONF_ENV_FILE", directory.join("env.conf"))
-            .env("RABBITMQ_CONFIG_FILE", directory.join("rabbitmq.conf"))
-            .env("RABBITMQ_MNESIA_BASE", directory.join("data"))
-            .env("RABBITMQ_LOG_BASE", directory.join("logs"))
-            .env("RABBITMQ_PID_FILE", directory.join("pid"))
-            .env("RABBITMQ_ENABLED_PLUGINS_FILE", directory.join("plugins"))
-            .env("RABBITMQ_NODENAME", format!("channels_{port}@localhost"))
-            .env("RABBITMQ_NODE_PORT", port.to_string())
-            .env("RABBITMQ_DIST_PORT", dist_port.to_string())
-            .env("ERL_EPMD_PORT", epmd_port.to_string())
-            .env("ERL_EPMD_ADDRESS", "127.0.0.1")
-            .env(
-                "RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS",
-                "+S 2:2 +A 2 -setcookie isolated_channels_test",
-            )
-            .env("RABBITMQ_ALLOW_INPUT", "1")
-            .env("RABBITMQ_SERVER_START_ARGS", "-noshell -noinput")
-            .stdin(Stdio::null())
-            .stdout(log.try_clone().unwrap())
-            .stderr(log)
-            .spawn()
-            .unwrap();
-        let broker = Self {
-            process,
-            command,
-            directory,
-            port,
-            epmd_port,
-        };
-        broker.wait_ready().await;
-        broker
-    }
-    async fn wait_ready(&self) {
-        timeout(Duration::from_secs(40), async {
-            loop {
-                if let Ok(Ok(conn)) = timeout(
-                    Duration::from_secs(1),
-                    Connection::connect(&self.uri(), ConnectionProperties::default()),
-                )
-                .await
-                {
-                    conn.close(200, "OK".into()).await.unwrap();
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        })
-        .await
-        .unwrap_or_else(|_| {
-            panic!(
-                "RabbitMQ startup failed: {}",
-                std::fs::read_to_string(self.directory.join("startup.log")).unwrap()
-            )
-        });
-    }
-    fn uri(&self) -> String {
-        format!("amqp://guest:guest@127.0.0.1:{}/%2f", self.port)
-    }
-    fn config(&self) -> AppConfig {
-        AppConfig::from_lookup(|key| match key {
-            "RABBIT_MQ" => Some(self.uri()),
-            "REDIS" => Some("127.0.0.1".into()),
-            "MONGO_PATH" | "TRADE_STATION_MONGO_PATH" | "ACCOUNT_VALIDATOR_MONGO_PATH" => {
-                Some("mongodb://localhost/test".into())
-            }
-            "RABBITMQ_RETRY_DELAY_MS" => Some("100".into()),
-            _ => None,
-        })
-        .unwrap()
-    }
-}
 fn trade() -> NewTradeMessage {
     NewTradeMessage {
         expires_at: 4102444800000,
@@ -1616,9 +1424,7 @@ async fn binary_signal(send_notification: bool, notification_error: bool) {
         }
     }
     let mut process = Process(
-        Command::new(env!("CARGO_BIN_EXE_channels-manager-v1"))
-            .current_dir(&broker.directory)
-            .env_clear()
+        authorization_process::command(&broker.directory)
             .envs(telegram_env)
             .env("BINGX_PUBLIC_API_BASE_URL", quote_endpoint)
             .env("RABBIT_MQ", broker.uri())

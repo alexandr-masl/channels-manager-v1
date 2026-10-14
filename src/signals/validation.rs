@@ -32,7 +32,9 @@ pub(super) fn validate(signal: &TradingSignal) -> Result<(), SignalError> {
         .map(|n| positive_decimal(n))
         .collect::<Result<Vec<_>, _>>()?;
     let stop = positive_decimal(&signal.stop_loss)?;
-    positive_decimal(signal.leverage.trim_end_matches(['x', 'X']))?;
+    if let Some(leverage) = &signal.leverage {
+        positive_decimal(leverage.trim_end_matches(['x', 'X']))?;
+    }
     let low = entries.iter().copied().fold(f64::INFINITY, f64::min);
     let high = entries.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let valid = if signal.is_long {

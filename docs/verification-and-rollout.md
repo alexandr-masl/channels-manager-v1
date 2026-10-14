@@ -79,10 +79,12 @@ the implemented BingX Futures flow; do not silently retire unrelated workflows.
 3. Choose one ownership mode above. Disable the corresponding TypeScript consumers on
    every workload. Drain their in-flight jobs and confirm zero consumers and zero
    unacknowledged deliveries on each transferred queue before starting Rust.
-4. Apply the prepared one-replica Rust deployment. Names/image match the original;
+4. Apply the reviewed Rust deployment at the approved replica count (the checked-in
+   manifest has two; optional example KEDA policy caps at one). Names match the original;
    if retaining TypeScript intake, it must run in another workload. Align KEDA triggers
    with enabled queues. See [build/deploy commands](deployment.md).
-5. Confirm one Rust consumer per enabled queue and no TypeScript consumer there.
+5. Confirm the expected Rust consumer count for the approved replicas on each
+   enabled queue and no TypeScript consumer there.
    Check raw intake remains untouched in worker-only mode. Submit controlled work and
    inspect final `expires_at`, stable `id`, `routing`, `client_data` and nested
    `positionConfiguration.accountingModel` in the isolated/staging destination.
@@ -100,6 +102,8 @@ Stop Rust consumers and drain first; confirm their connections/consumers are gon
 Restore the saved TypeScript manifests with the recorded image digest, role selection
 and KEDA triggers. Mutable `latest` makes `rollout undo` alone insufficient.
 Restore each queue to exactly one implementation. Preserve existing stored state.
+Rollback to a binary without authorization enforcement requires an explicit
+owner-approved security exception; follow [deployment recovery](deployment.md#rollback).
 
 Already acknowledged work is not recovered by rollback. Reconcile uncertain published
 trades with Trading Station using stable IDs before replaying anything. Do not replay

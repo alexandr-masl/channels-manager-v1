@@ -13,11 +13,18 @@ The proposed workflows and module layout are in [application architecture](docs/
 
 Requires Rust and Cargo with support for Rust edition 2024.
 
+Startup requires owner-issued authorization scoped to `channels-manager-v1`.
+Reuse your approved signed file outside the repository; see
+[authorization and permissions](docs/authorization.md). Export its path in the
+shell before normal startup; `.env.local` is read later. The offline
+`--check-config` mode requires no authorization and does not validate that file.
+
 ```sh
 cp .env.example .env.local
 # Edit .env.local for your environment.
+export APP_AUTHORIZATION_FILE=/absolute/operator/path/channels-manager-authorization.json
 cargo run
-# Validate settings without opening connections:
+# Validate settings offline without authorization or opening connections:
 cargo run -- --check-config
 ```
 
@@ -78,7 +85,7 @@ acceptance checks, exclusive queue ownership, and rollback.
 Start the app, then send from a second terminal:
 
 ```sh
-cargo run
+cargo run # Reuse the exported APP_AUTHORIZATION_FILE from Development above.
 # Wait for "Listening for messages on tg_bot_channel_update.".
 ```
 
@@ -146,7 +153,7 @@ CLIENT_TRADE_WORKER_PREFETCH=2
 
 Restart `cargo run`. Confirmed trades log `Client trade published` with
 `positionConfiguration` and expiry. Rejections and temporary dependency retries have separate logs.
-The worker checks settings, symbol metadata, position mode, managed leverage owners,
+The worker checks settings, symbol metadata, position mode, live positions/orders,
 USDT balance and requested leverage. Eligible flat One-Way accounts automatically
 switch to Hedge with one signed POST; success needs no confirmation GET. Switch
 errors/timeouts log and ACK the job without automatic retry.
@@ -161,4 +168,21 @@ Static sizing falls back to 95% of free balance when the requested margin exceed
 `STATIC_LOW_BALANCE_FALLBACK_RATIO_FUTURES` changes that ratio (greater than 0, at most 1).
 For a worker-only run, set `TELEGRAM_INTAKE_ENABLED=false`; role prefetch and retry
 queues are independent. The worker and eligible Hedge switching are always active. No
-trade-count limits, leverage changes, execution claims or execution locks are applied. See [implementation plan](docs/signal-manager.md).
+trade-count limits, execution claims or execution locks are applied. See [implementation plan](docs/signal-manager.md).
+
+## Signal workflow E2E
+
+```sh
+./scripts/test-signal-workflow.sh
+```
+
+Runs the real application against disposable RabbitMQ, MongoDB and Redis with
+scripted BingX/Telegram HTTP. It never loads `.env.local`. See the
+[workflow test design](docs/signal-workflow-e2e-design.md) for coverage.
+
+A Futures signal may omit leverage. Each client's job resolves it from explicit
+signal leverage, then an active user channel override, then active channel
+`futures.leverage`. User overrides require matching ownership and `own_settings`.
+For example: `"futures": {"active": true, "leverage": 3}`. Missing or invalid
+selected leverage rejects that client; it does not default to 1x. The worker
+always receives resolved leverage.

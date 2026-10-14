@@ -184,7 +184,6 @@ fn incomplete_and_ambiguous_signals_are_rejected() {
         ADA.replace("LONG", ""),
         ADA.replace("LONG", "").replace("LEVERAGE 3x", ""),
         ADA.replace("LONG", "LONG SHORT"),
-        ADA.replace("LEVERAGE 3x", ""),
         ADA.replace("⚜️SL Hard at 0.18", ""),
         ADA.replace("#ADA/USDT", "#ADA/BTC"),
         ADA.replace("#ADA/USDT", "#ADA/USDT #BTC/USDT"),
@@ -420,7 +419,7 @@ fn whitespace_emoji_case_and_line_endings_do_not_change_values() {
     assert!(!signal.is_long);
     assert_eq!(signal.buy_targets, ["2500.50"]);
     assert_eq!(signal.sell_targets, ["2400.25", "2300"]);
-    assert_eq!(signal.leverage, "5X");
+    assert_eq!(signal.leverage.as_deref(), Some("5X"));
 }
 
 #[test]
@@ -429,7 +428,7 @@ fn decimal_spelling_is_preserved_without_numeric_reserialization() {
     assert_eq!(signal.buy_targets, [".25", "0.2500"]);
     assert_eq!(signal.sell_targets, ["01.00"]);
     assert_eq!(signal.stop_loss, ".10");
-    assert_eq!(signal.leverage, "3.0x");
+    assert_eq!(signal.leverage.as_deref(), Some("3.0x"));
 }
 
 #[test]
