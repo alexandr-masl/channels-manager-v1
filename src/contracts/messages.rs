@@ -105,6 +105,15 @@ pub enum ExecutionRoute {
     OneWay,
 }
 
+impl ExecutionRoute {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Hedge => "ORDER_LEDGER_V1",
+            Self::OneWay => "ONE_WAY_V1",
+        }
+    }
+}
+
 pub struct TradeIdentity<'a> {
     pub channel_id: i64,
     pub message_id: i64,

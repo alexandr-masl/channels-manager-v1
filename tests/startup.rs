@@ -23,6 +23,110 @@ impl Drop for TestApp {
 }
 const LOCAL: &str = "RABBIT_MQ='amqp://unreachable.invalid'\nMONGO_PATH=mongodb://unreachable.invalid/bot\nTRADE_STATION_MONGO_PATH=mongodb://unreachable.invalid/trading\nACCOUNT_VALIDATOR_MONGO_PATH=mongodb://unreachable.invalid/accounts\nREDIS=unreachable.invalid\n";
 
+fn bounded_output(command: &mut Command) -> std::process::Output {
+    use std::{
+        process::{Child, Stdio},
+        time::{Duration, Instant},
+    };
+    struct Process(Option<Child>);
+    impl Drop for Process {
+        fn drop(&mut self) {
+            if let Some(child) = &mut self.0 {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+    let mut process = Process(Some(
+        command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    ));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if process.0.as_mut().unwrap().try_wait().unwrap().is_some() {
+            return process.0.take().unwrap().wait_with_output().unwrap();
+        }
+        assert!(Instant::now() < deadline, "startup exceeded deadline");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn check_config_with_missing_authorization_never_connects_to_tripwires() {
+    let app = TestApp::new(None);
+    let listeners: Vec<_> = (0..5)
+        .map(|_| {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            listener
+        })
+        .collect();
+    let mut command = app.command();
+    command
+        .arg("--check-config")
+        .env("APP_AUTHORIZATION_FILE", app.0.join("missing.json"))
+        .env(
+            "RABBIT_MQ",
+            format!("amqp://{}", listeners[0].local_addr().unwrap()),
+        );
+    for (key, listener) in [
+        "MONGO_PATH",
+        "TRADE_STATION_MONGO_PATH",
+        "ACCOUNT_VALIDATOR_MONGO_PATH",
+    ]
+    .iter()
+    .zip(&listeners[1..4])
+    {
+        command.env(
+            key,
+            format!("mongodb://{}/fixture", listener.local_addr().unwrap()),
+        );
+    }
+    command.env("REDIS", "127.0.0.1").env(
+        "REDIS_CLIENT_PORT",
+        listeners[4].local_addr().unwrap().port().to_string(),
+    );
+    let output = bounded_output(&mut command);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"Configuration valid.\n");
+    assert!(output.stderr.is_empty());
+    for listener in listeners {
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+}
+
+#[test]
+fn unsupported_arguments_precede_authorization_and_configuration() {
+    let app = TestApp::new(Some(r#"RABBIT_MQ="private-password"#));
+    for args in [
+        vec!["--help"],
+        vec!["--check-config", "--consume"],
+        vec!["--check-config", "--check-config"],
+    ] {
+        let output = bounded_output(
+            app.command()
+                .args(args)
+                .env("APP_AUTHORIZATION_FILE", app.0.join("missing.json")),
+        );
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            output.stderr,
+            b"Usage: channels-manager-v1 [--check-config]\n"
+        );
+    }
+}
+
 #[test]
 fn invalid_configuration_exits_nonzero_without_exposing_the_uri() {
     let app = TestApp::new(None);

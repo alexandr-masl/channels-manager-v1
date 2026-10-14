@@ -1,6 +1,9 @@
 use super::{OperationGuard, RabbitError, Session};
 use crate::contracts::{
-    messages::{DeadLetterMessage, NewTradeMessage, PositionModeActionRequired, trade_creation_id},
+    messages::{
+        ClientTradeJob, DeadLetterMessage, NewTradeMessage, PositionModeActionRequired,
+        trade_creation_id,
+    },
     rabbitmq::*,
 };
 use lapin::{
@@ -19,6 +22,7 @@ use tokio::{
 
 #[derive(Clone, Copy)]
 enum Destination {
+    ClientJob,
     Trade,
     Admission,
     Retry,
@@ -34,6 +38,31 @@ pub struct PreparedPublication {
     expires_at: Option<u64>,
 }
 impl PreparedPublication {
+    pub fn client_job(job: &ClientTradeJob) -> Result<Self, RabbitError> {
+        let expiry = job
+            .trade_expires_at
+            .filter(|expiry| *expiry > 0)
+            .ok_or(RabbitError::InvalidPayload)?;
+        if job.idempotency_key.is_empty() || job.partition_key.is_empty() {
+            return Err(RabbitError::InvalidPayload);
+        }
+        let mut headers = FieldTable::default();
+        headers.insert(
+            IDEMPOTENCY_HEADER.into(),
+            AMQPValue::LongString(job.idempotency_key.clone().into()),
+        );
+        Self::prepare(
+            Destination::ClientJob,
+            serde_json::to_vec(job).map_err(|_| RabbitError::InvalidPayload)?,
+            Some(&job.idempotency_key),
+            headers,
+            Some(expiry),
+        )
+    }
+    pub fn is_expired(&self, now_ms: u64) -> bool {
+        self.expires_at.is_some_and(|expiry| now_ms >= expiry)
+    }
+
     pub fn trade(message: &NewTradeMessage, idempotency_key: &str) -> Result<Self, RabbitError> {
         let id = trade_creation_id(idempotency_key);
         if idempotency_key.is_empty()
@@ -153,10 +182,11 @@ impl Publisher {
         if self.session.publishing_closed.load(Ordering::Acquire) {
             return Err(RabbitError::Unavailable);
         }
-        if message.expires_at.is_some_and(|expiry| now_ms() >= expiry) {
+        if message.is_expired(now_ms()) {
             return Err(RabbitError::Expired);
         }
         let queue = match message.destination {
+            Destination::ClientJob => BINGX_FUTURES_QUEUE,
             Destination::Trade => &self.trade_queue,
             Destination::Admission => ADMISSION_EVENT_QUEUE,
             Destination::Retry => &self.retry_queue,

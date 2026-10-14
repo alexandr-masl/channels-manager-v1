@@ -1,0 +1,131 @@
+{
+  "expires_at": 0,
+  "trade_object": {
+    "id": "b1e882e60350cd3aa2443b5f600fa031",
+    "exch_client": "_binance_futures_",
+    "is_long": true,
+    "state": "NEW",
+    "quantity": 3.4,
+    "symbol": "SOL-USDT",
+    "chat_id": 42,
+    "strategy": {
+      "name": "basic",
+      "is_pro": false,
+      "x_pro": 0,
+      "pro_sl_price": 0
+    },
+    "used_coins": {
+      "wished_quantity": 3.4
+    },
+    "precisions": {
+      "symbol": "SOL-USDT",
+      "priceRangeUp": 5,
+      "priceRangeDown": 0.5,
+      "tickSize": 0.0001,
+      "minQty": 0.1,
+      "maxQty": 1388.888888888889,
+      "minNotional": 1.0,
+      "lotSize": 0.1
+    },
+    "buy_targets": [
+      {
+        "price": "71.00",
+        "symbol": "SOL-USDT",
+        "clientOrderId": "7d7f27f8d2a8ecf2f178b7aa5706b747",
+        "opened": true,
+        "status": "new",
+        "role": "BT",
+        "side": "BUY",
+        "type": "LIMIT",
+        "quantity": 1.7,
+        "fraction": 0.5
+      },
+      {
+        "price": "72.00",
+        "symbol": "SOL-USDT",
+        "clientOrderId": "05a658677afcebe9eeeab64005713ab0",
+        "opened": true,
+        "status": "new",
+        "role": "BT",
+        "side": "BUY",
+        "type": "LIMIT",
+        "quantity": 1.7,
+        "fraction": 0.5
+      }
+    ],
+    "sell_targets": [
+      {
+        "price": "88.00",
+        "symbol": "SOL-USDT",
+        "clientOrderId": "1c30d535d43b534344543be8bda8ca7e",
+        "opened": true,
+        "status": "new",
+        "role": "ST",
+        "side": "SELL",
+        "type": "LIMIT",
+        "fraction": 0.5
+      },
+      {
+        "price": "90.00",
+        "symbol": "SOL-USDT",
+        "clientOrderId": "b695f44dbaeca7db24016e4c02fcef7c",
+        "opened": true,
+        "status": "new",
+        "role": "ST",
+        "side": "SELL",
+        "type": "LIMIT",
+        "fraction": 0.5
+      }
+    ],
+    "stop_loss": {
+      "price": "70.00",
+      "symbol": "SOL-USDT",
+      "clientOrderId": "33dba00681082a9e2b5fb32254456d47",
+      "opened": true,
+      "status": "new",
+      "role": "SL",
+      "side": "SELL",
+      "type": "STOP_LOSS_LIMIT"
+    },
+    "positionSizing": {
+      "mode": "dynamic",
+      "source": "signal",
+      "requestedQuoteAmount": 5.0,
+      "effectiveQuoteAmount": 5.0,
+      "balanceFallbackApplied": false,
+      "fallbackUsageRatio": null,
+      "marginQuoteAmount": 5.0,
+      "notionalQuoteAmount": 250.0,
+      "rawTradeQuantity": 3.4722222222222223,
+      "executableTradeQuantity": 3.4,
+      "executableNotionalQuoteAmount": 243.1,
+      "display": "0.5% signal override",
+      "balanceFraction": 0.005
+    },
+    "auto_Trade": {
+      "channel_id": -1001596367704,
+      "message_id": 7,
+      "usingChannelConfig": true
+    },
+    "tradeLeverage": "50x",
+    "futuresMarginMode": "isolated",
+    "idempotencyKey": "auto-trade:-1001596367704:7:42:account-42:BingX:futures:SOLUSDT",
+    "routing": {
+      "jobType": "create_trade",
+      "provider": "BingX",
+      "market": "futures",
+      "symbol": "SOLUSDT",
+      "partitionKey": "client-symbol:account-42:futures:SOLUSDT"
+    },
+    "positionConfiguration": {
+      "accountingModel": "ORDER_LEDGER_V1"
+    }
+  },
+  "client_data": {
+    "chatId": 42,
+    "clientId": "account-42",
+    "provider": "BingX",
+    "key": "fixture-key",
+    "keySecret": "fixture-secret"
+  }
+}

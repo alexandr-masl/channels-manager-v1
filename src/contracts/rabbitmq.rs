@@ -50,6 +50,15 @@ pub fn queue_contracts(config: &RabbitMqConfig) -> Vec<QueueContract> {
         "x-dead-letter-exchange":"",
         "x-dead-letter-routing-key":config.input_queue,
     });
+    if !queues.iter().any(|q| q.name == BINGX_FUTURES_QUEUE) {
+        queues.push(QueueContract {
+            name: BINGX_FUTURES_QUEUE.into(),
+            durable: false,
+            exclusive: false,
+            auto_delete: false,
+            arguments: json!({}),
+        });
+    }
     queues
 }
 

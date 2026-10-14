@@ -296,3 +296,113 @@ fn redis_ipv6_brackets_must_be_balanced_and_are_removed_for_the_driver() {
         "::1"
     );
 }
+
+#[test]
+fn market_data_endpoint_only_allows_bingx_or_local_test_origin() {
+    for endpoint in [
+        "http://example.com",
+        "https://user:secret@open-api.bingx.com",
+        "http://127.0.0.1:1234/path",
+        "http://127.0.0.1:1234?key=secret",
+    ] {
+        let mut env = environment();
+        env.insert("BINGX_PUBLIC_API_BASE_URL".into(), endpoint.into());
+        let error = AppConfig::from_lookup(|key| env.get(key).cloned()).unwrap_err();
+        assert_eq!(error.setting, "BINGX_PUBLIC_API_BASE_URL");
+        assert!(!error.to_string().contains("secret"));
+    }
+    for endpoint in ["https://open-api.bingx.com", "http://127.0.0.1:1234"] {
+        let mut env = environment();
+        env.insert("BINGX_PUBLIC_API_BASE_URL".into(), endpoint.into());
+        assert!(AppConfig::from_lookup(|key| env.get(key).cloned()).is_ok());
+    }
+}
+
+#[test]
+fn telegram_sender_is_optional_and_token_is_redacted() {
+    let mut env = environment();
+    assert!(
+        AppConfig::from_lookup(|k| env.get(k).cloned())
+            .unwrap()
+            .telegram_bot_token
+            .is_none()
+    );
+    env.insert("SATOSHI_TG_TOKEN".into(), "123:very_private_token".into());
+    let config = AppConfig::from_lookup(|k| env.get(k).cloned()).unwrap();
+    assert!(config.telegram_bot_token.is_some());
+    assert!(!format!("{config:?}").contains("very_private_token"));
+    env.insert("SATOSHI_TG_TOKEN".into(), "invalid-secret".into());
+    let error = AppConfig::from_lookup(|k| env.get(k).cloned()).unwrap_err();
+    assert_eq!(error.setting, "SATOSHI_TG_TOKEN");
+    assert!(!format!("{error:?}").contains("invalid-secret"));
+}
+
+#[test]
+fn consumer_roles_and_prefetch_are_independent() {
+    let mut env = environment();
+    let defaults = AppConfig::from_lookup(|k| env.get(k).cloned()).unwrap();
+    assert!(defaults.telegram_intake_enabled);
+    assert_eq!(defaults.client_trade_worker_prefetch.get(), 2);
+    for intake in ["true", "false"] {
+        env.insert("TELEGRAM_INTAKE_ENABLED".into(), intake.into());
+        env.insert("CONSUMER_PREFETCH".into(), "7".into());
+        env.insert("CLIENT_TRADE_WORKER_PREFETCH".into(), "3".into());
+        let config = AppConfig::from_lookup(|k| env.get(k).cloned()).unwrap();
+        assert_eq!(config.telegram_intake_enabled, intake == "true");
+        assert_eq!(config.rabbitmq.prefetch.get(), 7);
+        assert_eq!(config.client_trade_worker_prefetch.get(), 3);
+    }
+}
+
+#[test]
+fn consumer_role_settings_reject_invalid_values() {
+    for (key, value) in [
+        ("TELEGRAM_INTAKE_ENABLED", "yes"),
+        ("CLIENT_TRADE_WORKER_PREFETCH", "0"),
+        ("CLIENT_TRADE_WORKER_PREFETCH", "65536"),
+    ] {
+        let mut env = environment();
+        env.insert(key.into(), value.into());
+        assert_eq!(
+            AppConfig::from_lookup(|k| env.get(k).cloned())
+                .unwrap_err()
+                .setting,
+            key
+        );
+    }
+}
+
+#[test]
+fn static_fallback_ratio_is_positive_and_at_most_one() {
+    let mut env = environment();
+    assert_eq!(
+        AppConfig::from_lookup(|k| env.get(k).cloned())
+            .unwrap()
+            .static_low_balance_fallback_ratio_futures,
+        0.95
+    );
+    for value in ["0", "-0.1", "1.01", "NaN", "inf"] {
+        env.insert(
+            "STATIC_LOW_BALANCE_FALLBACK_RATIO_FUTURES".into(),
+            value.into(),
+        );
+        assert_eq!(
+            AppConfig::from_lookup(|k| env.get(k).cloned())
+                .unwrap_err()
+                .setting,
+            "STATIC_LOW_BALANCE_FALLBACK_RATIO_FUTURES"
+        );
+    }
+    for value in ["0.5", "1"] {
+        env.insert(
+            "STATIC_LOW_BALANCE_FALLBACK_RATIO_FUTURES".into(),
+            value.into(),
+        );
+        assert_eq!(
+            AppConfig::from_lookup(|k| env.get(k).cloned())
+                .unwrap()
+                .static_low_balance_fallback_ratio_futures,
+            value.parse::<f64>().unwrap()
+        );
+    }
+}

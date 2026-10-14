@@ -3,19 +3,28 @@
 Rust application for the incremental migration of `satoshi-channel-updates-manager`.
 
 The app connects MongoDB, Redis, and RabbitMQ through the runtime lifecycle.
-The executable currently logs and acknowledges raw Telegram messages from
-`tg_bot_channel_update`. BingX Futures trade processing follows separately.
+The executable validates Telegram envelopes/source timestamps, authorizes channels,
+parses signals, loads eligible BingX account context and prepares client jobs,
+then logs and acknowledges messages from `tg_bot_channel_update`. BingX Futures trade processing follows separately.
 See [AGENTS.md](AGENTS.md) for the migration boundary and source-of-truth documentation.
+The proposed workflows and module layout are in [application architecture](docs/architecture.md).
 
 ## Development
 
 Requires Rust and Cargo with support for Rust edition 2024.
 
+Startup requires owner-issued authorization scoped to `channels-manager-v1`.
+Reuse your approved signed file outside the repository; see
+[authorization and permissions](docs/authorization.md). Export its path in the
+shell before normal startup; `.env.local` is read later. The offline
+`--check-config` mode requires no authorization and does not validate that file.
+
 ```sh
 cp .env.example .env.local
 # Edit .env.local for your environment.
+export APP_AUTHORIZATION_FILE=/absolute/operator/path/channels-manager-authorization.json
 cargo run
-# Validate settings without opening connections:
+# Validate settings offline without authorization or opening connections:
 cargo run -- --check-config
 ```
 
@@ -63,6 +72,9 @@ cargo test --test rabbitmq -- --include-ignored
 
 ## Complete verification and cutover
 
+Docker, local Compose, and Kubernetes replacement commands are in
+[container deployment](docs/deployment.md), using the original Docker Hub and cluster names.
+
 Run `./scripts/verify.sh` with all three service binaries installed. It includes
 all integration tests and matches the GitHub Actions verification job.
 See [verification coverage and rollout](docs/verification-and-rollout.md) for setup,
@@ -73,7 +85,7 @@ acceptance checks, exclusive queue ownership, and rollback.
 Start the app, then send from a second terminal:
 
 ```sh
-cargo run
+cargo run # Reuse the exported APP_AUTHORIZATION_FILE from Development above.
 # Wait for "Listening for messages on tg_bot_channel_update.".
 ```
 
@@ -86,9 +98,91 @@ cargo run --example send_telegram_signal -- -1001596367704
 The sender uses `.env.local`, your ADA signal text, a fresh message ID/date, and
 channel ID `-1001596367704`. It publishes to the original bot queue
 `tg_bot_channel_update` on a local broker with confirms and a 60-second TTL.
-The app prints the incoming body and acknowledges it; no parsing or trades run.
+The app validates the envelope/source time and logs `Signal parsed: ... result={...}`
+for the base USDT Futures format. Other messages log a skip/rejection reason.
+The terminal also shows `Signal prepared:` with job counts and `published_jobs: 0`.
+Client-job publication and the BingX worker are always active.
+The terminal then shows `Signal published:` with the confirmed `published_jobs` count.
+Jobs go to `satoshi-channel-updates.client-trade.bingx.futures`; Telegram messages
+are acknowledged after all job confirms. The Rust worker validates, builds and
+publishes trades to `create-new-trusted-trade` (or `RABBITMQ_QUEUE`).
+An existing TypeScript worker can execute these jobs. Coordinate exclusive ownership
+of Telegram intake and client-job consumption before using a shared broker.
+The configured databases must contain the channel, connected BingX accounts and active
+auto-trading subscriptions. Otherwise the workflow logs its skip reason.
 `CLIENT_TRADE_WORKER_QUEUES` describes the later BingX client-job boundary and is
-not the queue used by this temporary raw-message logger.
+not the queue selected by `Infrastructure::for_telegram_intake`.
 
 Use a local broker/vhost without the TypeScript consumer: consumers sharing the
-same queue compete for messages. This logger acknowledges messages after logging.
+same queue compete for messages. Use isolated services for workflow tests.
+
+
+Signal preparation loads per-user open trades and one shared BingX market snapshot.
+It preserves the original client-job payload, with no trade-count limits or
+execution claims/locks. See [signal manager design](docs/signal-manager.md).
+
+
+### Automatic Telegram acceptance reply
+
+Set `SATOSHI_TG_TOKEN` in `.env.local` to the original bot token and restart
+`cargo run`. The app sends `created ✅` as a reply to the original channel message
+after successful preparation, before job publication. Without the token, replies are disabled.
+
+The sender uses only Telegram's [sendMessage API](https://core.telegram.org/bots/api#sendmessage);
+it does not poll updates or modify webhooks. The bot needs posting permission in
+the channel and the source message must exist. The synthetic RabbitMQ example
+uses a generated message ID, so use a real channel signal to test replies.
+
+Logs show `Signal notification sent` or a sanitized failure reason. Requests have
+a maximum five-second timeout and no automatic resend. Notification failures do
+not block client jobs. Source redelivery may repeat a reply; deduplication remains
+separate work. No live Telegram send was performed by the automated tests.
+
+For containers, inject `SATOSHI_TG_TOKEN` through the runtime environment (a
+Kubernetes Secret in the cluster); never include it in the image or manifest.
+
+
+### Client-job worker (slices 3–4)
+
+For an isolated workflow test, set:
+
+```env
+TELEGRAM_INTAKE_ENABLED=true
+CLIENT_TRADE_WORKER_PREFETCH=2
+```
+
+Restart `cargo run`. Confirmed trades log `Client trade published` with
+`positionConfiguration` and expiry. Rejections and temporary dependency retries have separate logs.
+The worker checks settings, symbol metadata, position mode, live positions/orders,
+USDT balance and requested leverage. Eligible flat One-Way accounts automatically
+switch to Hedge with one signed POST; success needs no confirmation GET. Switch
+errors/timeouts log and ACK the job without automatic retry.
+
+The worker publishes `{expires_at, trade_object, client_data}` to
+`create-new-trusted-trade` (or `RABBITMQ_QUEUE`) and ACKs only after confirmation.
+The trade includes `positionConfiguration.accountingModel` (`ORDER_LEDGER_V1` or
+`ONE_WAY_V1`), sizing metadata and entry/profit/stop targets. Trading Station executes
+orders. Use isolated infrastructure for tests and coordinate queue ownership at cutover.
+
+Static sizing falls back to 95% of free balance when the requested margin exceeds it;
+`STATIC_LOW_BALANCE_FALLBACK_RATIO_FUTURES` changes that ratio (greater than 0, at most 1).
+For a worker-only run, set `TELEGRAM_INTAKE_ENABLED=false`; role prefetch and retry
+queues are independent. The worker and eligible Hedge switching are always active. No
+trade-count limits, execution claims or execution locks are applied. See [implementation plan](docs/signal-manager.md).
+
+## Signal workflow E2E
+
+```sh
+./scripts/test-signal-workflow.sh
+```
+
+Runs the real application against disposable RabbitMQ, MongoDB and Redis with
+scripted BingX/Telegram HTTP. It never loads `.env.local`. See the
+[workflow test design](docs/signal-workflow-e2e-design.md) for coverage.
+
+A Futures signal may omit leverage. Each client's job resolves it from explicit
+signal leverage, then an active user channel override, then active channel
+`futures.leverage`. User overrides require matching ownership and `own_settings`.
+For example: `"futures": {"active": true, "leverage": 3}`. Missing or invalid
+selected leverage rejects that client; it does not default to 1x. The worker
+always receives resolved leverage.
