@@ -1,6 +1,6 @@
 # Signal extraction and optional exits
 
-Status: agreed design; implementation pending.
+Status: implemented.
 
 ## Purpose
 
@@ -62,12 +62,12 @@ leverage must be a positive integer within exchange limits.
   Preserve the existing object shapes when either is supplied.
 - Do not invent target/stop prices or manufacture a zero-price order.
 
-Trading Station's `src/trades/target_validation.rs` currently accepts empty target
-arrays and absent/null stop loss. Verify the published shapes through its creation
-contract and relevant strategy paths; target-dependent strategy assumptions must
-handle empty exits. Its validation acceptance alone does not prove all lifecycle
-paths support them. Any needed downstream changes must be coordinated before
-rollout. Channel settings do not manufacture exits unless separately specified.
+Trading Station accepts empty target arrays and absent stops at creation. The
+coordinated change in `../trading-station-rust/src/trades/strategies/advanced.rs`
+keeps Advanced configured: after a profit fill, absent stop loss requests further
+profit processing without a stop move or notification. An invalid supplied stop
+still errors. Deploy that Trading Station change alongside support for stop-free
+Advanced signals. Creation tests cover all four exit combinations.
 
 ## Reported signal
 

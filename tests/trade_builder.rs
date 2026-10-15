@@ -14,6 +14,10 @@ fn fixtures() -> Vec<Value> {
 fn prepared(case: &Value) -> PreparedAccount {
     let job: ClientTradeJob = serde_json::from_value(case["job"].clone()).unwrap();
     PreparedAccount {
+        notification_context:
+            channels_manager_v1::trading::notifications::NotificationContext::from_validated(
+                &channels_manager_v1::trading::job::validate_job(&job, 1).unwrap(),
+            ),
         settings: resolve_settings(&job).unwrap(),
         job,
         admission: AdmittedAccount {
@@ -162,4 +166,74 @@ fn rebuilding_preserves_identity_order_ids_and_expiry() {
         serde_json::to_value(a).unwrap(),
         serde_json::to_value(b).unwrap()
     );
+}
+
+#[test]
+fn publishes_only_supplied_exits_for_long_and_short() {
+    let cases = fixtures();
+    for is_long in [true, false] {
+        let case = cases
+            .iter()
+            .find(|case| case["job"]["signalData"]["is_long"] == is_long)
+            .unwrap();
+        let baseline = build_trade(&prepared(case), 0.95, 1).unwrap().trade_object;
+        for targets in [true, false] {
+            for stop in [true, false] {
+                let mut p = prepared(case);
+                if !targets {
+                    p.job.signal_data["sell_targets"] = json!([]);
+                    p.job
+                        .channel_settings
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("default_sell_targets");
+                    p.settings = resolve_settings(&p.job).unwrap();
+                }
+                if !stop {
+                    p.job
+                        .signal_data
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("stop_loss");
+                }
+                let trade = build_trade(&p, 0.95, 1).unwrap().trade_object;
+                assert_eq!(trade["buy_targets"], baseline["buy_targets"]);
+                assert_eq!(trade["quantity"], baseline["quantity"]);
+                assert_eq!(
+                    trade["sell_targets"],
+                    if targets {
+                        baseline["sell_targets"].clone()
+                    } else {
+                        json!([])
+                    }
+                );
+                assert_eq!(
+                    trade.get("stop_loss"),
+                    if stop {
+                        baseline.get("stop_loss")
+                    } else {
+                        None
+                    }
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn business_build_failure_uses_the_prepared_reporting_context() {
+    let mut account = prepared(&fixtures()[0]);
+    account.job.signal_data["position"] = json!(2);
+    account.settings = resolve_settings(&account.job).unwrap();
+    let Err(TradeBuildError::Rejected(reason)) = build_trade(&account, 0.95, 1) else {
+        panic!("business build failure")
+    };
+    assert_eq!(reason, "positionExceedsBalance");
+    let notice = account
+        .user_failure(reason)
+        .expect("allowlisted builder failure");
+    assert_eq!(notice.context.chat_id, account.notification_context.chat_id);
+    assert_eq!(notice.context.account_id, account.job.client["clientId"]);
+    assert_eq!(notice.context.idempotency_key, account.job.idempotency_key);
+    assert_eq!(notice.failure.reason(), reason);
 }

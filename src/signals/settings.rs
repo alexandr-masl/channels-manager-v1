@@ -98,8 +98,16 @@ pub fn resolve_settings(job: &ClientTradeJob) -> Result<ResolvedSettings, Settin
     };
     let position_size = resolve_position(&job.signal_data, &config)?;
     for field in ["default_buy_targets", "default_sell_targets"] {
+        let optional = field == "default_sell_targets"
+            && job.signal_data["sell_targets"]
+                .as_array()
+                .is_some_and(Vec::is_empty);
+        if optional && config.get(field).is_none() {
+            continue;
+        }
         if !config[field].as_array().is_some_and(|ts| {
-            !ts.is_empty() && ts.iter().all(|t| positive_number(&t["fraction"]).is_some())
+            (optional || !ts.is_empty())
+                && ts.iter().all(|t| positive_number(&t["fraction"]).is_some())
         }) {
             return Err(SettingsError::InvalidTargets);
         }

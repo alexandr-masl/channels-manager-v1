@@ -161,11 +161,14 @@ pub fn build_trade(
         "quantity":quantity,"symbol":validated.normalized_symbol,"chat_id":validated.chat_id,
         "strategy":{"name":config["strategy"],"is_pro":pro,"x_pro":config.get("xPro").filter(|_|pro).cloned().unwrap_or(json!(0)),"pro_sl_price":0},
         "used_coins":{"wished_quantity":quantity},"precisions":precision.wire,
-        "buy_targets":entries,"sell_targets":profits,"stop_loss":stop,"positionSizing":metadata,
+        "buy_targets":entries,"sell_targets":profits,"positionSizing":metadata,
         "auto_Trade":auto_trade,"tradeLeverage":signal["leverage"],"futuresMarginMode":settings.margin_mode,
         "idempotencyKey":job.idempotency_key,
         "routing":{"jobType":"create_trade","provider":"BingX","market":"futures","symbol":job.symbol,"partitionKey":job.partition_key}
     });
+    if let Some(stop) = stop {
+        trade["stop_loss"] = stop;
+    }
     prepared
         .admission
         .apply_to_trade_object(trade.as_object_mut().unwrap());

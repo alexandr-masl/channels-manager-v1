@@ -28,6 +28,33 @@ async fn signal_workflow_matrix() {
         Scenario::base("sol-range-position-override", Signal::Sol, 50),
         Scenario::base("ada-channel-fallback", Signal::Missing, 3),
     ];
+    for (name, targets, stop) in [
+        ("ada-targets-and-stop", true, true),
+        ("ada-targets-without-stop", true, false),
+        ("ada-stop-without-targets", false, true),
+        ("ada-without-exits", false, false),
+    ] {
+        let mut scenario = Scenario::base(name, Signal::Ada, 3);
+        scenario.targets = targets;
+        scenario.stop = stop;
+        scenarios.push(scenario);
+    }
+    let mut decorated = Scenario::base("ada-decorated-metadata", Signal::Ada, 3);
+    decorated.decorated = true;
+    scenarios.push(decorated);
+    let mut commentary = Scenario::base("regular-channel-commentary", Signal::Ada, 3);
+    commentary.raw_text = Some(
+        "ADA/USDT is at 0.217. LONG interest is growing; BREAKOUT could follow.\nReference VQA-83827.1",
+    );
+    commentary.channel_terminal = Some("Channel update skipped:");
+    scenarios.push(commentary);
+    let mut management = Scenario::base("signal-mixed-close-instruction", Signal::Ada, 3);
+    management.raw_text = Some(concat!(
+        "#ADA/USDT LONG\nENTRY 0.217\nTP1 0.22\nSL 0.18\nLEVERAGE 3x\n",
+        "CLOSE ADA/USDT"
+    ));
+    management.channel_terminal = Some("Channel update rejected:");
+    scenarios.push(management);
     let mut changed = Scenario::base("ada-change-leverage", Signal::Ada, 3);
     changed.current_leverage = 5;
     scenarios.push(changed);
@@ -59,6 +86,19 @@ async fn signal_workflow_matrix() {
     blocked.current_leverage = 5;
     blocked.blocked = true;
     scenarios.push(blocked);
+    let mut balance = Scenario::base("insufficient-balance-history", Signal::Ada, 3);
+    balance.balance = "0";
+    scenarios.push(balance);
+    let mut limit = Scenario::base("leverage-limit-history", Signal::Ada, 3);
+    limit.max_leverage = 2;
+    scenarios.push(limit);
+    let mut retry = Scenario::base("history-write-retries-only", Signal::Ada, 3);
+    retry.balance = "0";
+    retry.history_write_failures = true;
+    scenarios.push(retry);
+    let mut malformed = Scenario::base("malformed-client-work", Signal::Ada, 3);
+    malformed.malformed = true;
+    scenarios.push(malformed);
     let mut failed = Scenario::base("failed-leverage-post", Signal::Ada, 3);
     failed.current_leverage = 5;
     failed.post_fails = true;

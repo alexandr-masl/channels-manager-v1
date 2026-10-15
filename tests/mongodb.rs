@@ -1,7 +1,8 @@
 use channels_manager_v1::{
     config::AppConfig,
     contracts::storage::*,
-    mongo::{ClaimInput, ClaimOutcome, MongoConnections, MongoRole},
+    mongo::{ClaimInput, ClaimOutcome, FailureNotificationOutcome, MongoConnections, MongoRole},
+    trading::notifications::NotificationContext,
 };
 use futures_util::future::join_all;
 use mongodb::{
@@ -602,5 +603,152 @@ async fn channel_context_queries_match_original_collections_and_projections() {
             .unwrap()
             .is_empty()
     );
+    mongo.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "starts isolated mongod; requires loopback access"]
+async fn failure_history_is_atomic_bounded_and_never_upserts_users() {
+    use FailureNotificationOutcome::{AlreadyPresent, Appended, UserMissing};
+    let (server, admin) = Server::start().await;
+    let config = server.config();
+    let mut mongo = MongoConnections::new(config.mongo, config.runtime.operation_timeout);
+    mongo.connect().await.unwrap();
+    let users = admin
+        .database("bot")
+        .collection::<Document>(USER_CONFIGS_COLLECTION);
+    let settings = doc! {"strategy":"advanced","leverage":5};
+    users.insert_many([
+        doc! {"user":42,"settings":settings.clone(),"lastNotifications":[{"info":"legacy","time":"old"}]},
+        doc! {"user":43},
+        doc! {"user":44,"lastNotifications":"invalid"},
+    ]).await.unwrap();
+    let context = NotificationContext {
+        chat_id: 42,
+        account_id: "account-1".into(),
+        account_name: "BingX-1".into(),
+        symbol: "ADA-USDT".into(),
+        channel_id: -100,
+        message_id: 7,
+        idempotency_key: "validated-job-1".into(),
+    };
+    let failure = context.user_failure("insufficientBalance").unwrap();
+    let time = DateTime::from_millis(1_700_000_000_000);
+    let entry = failure.history_entry(time);
+    assert_eq!(entry, failure.history_entry(time));
+    let repo = mongo.repositories().unwrap().notifications;
+    let outcomes = join_all((0..32).map(|_| repo.append_failure(&entry))).await;
+    assert_eq!(outcomes.iter().filter(|v| **v == Ok(Appended)).count(), 1);
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|v| **v == Ok(AlreadyPresent))
+            .count(),
+        31
+    );
+    let saved = users.find_one(doc! {"user":42}).await.unwrap().unwrap();
+    assert_eq!(saved.get_document("settings"), Ok(&settings));
+    let history = saved.get_array("lastNotifications").unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(
+        history[0].as_document().unwrap().get_str("info"),
+        Ok("legacy")
+    );
+    let notice = history[1].as_document().unwrap();
+    assert_eq!(notice.len(), 3);
+    assert!(!notice.get_str("eventId").unwrap().is_empty());
+    assert_eq!(
+        notice.get_str("time").unwrap(),
+        time.try_to_rfc3339_string().unwrap()
+    );
+    assert_eq!(
+        notice.get_str("info").unwrap(),
+        failure.failure.format("ADA-USDT", "BingX-1")
+    );
+    // A later retry neither changes the original timestamp nor moves the entry.
+    assert_eq!(
+        repo.append_failure(&failure.history_entry(DateTime::now()))
+            .await
+            .unwrap(),
+        AlreadyPresent
+    );
+    assert_eq!(
+        users.find_one(doc! {"user":42}).await.unwrap().unwrap(),
+        saved
+    );
+
+    let mut other = context.clone();
+    other.chat_id = 43;
+    assert_eq!(
+        repo.append_failure(
+            &other
+                .user_failure("insufficientBalance")
+                .unwrap()
+                .history_entry(time)
+        )
+        .await
+        .unwrap(),
+        Appended
+    );
+    other.chat_id = 999;
+    assert_eq!(
+        repo.append_failure(
+            &other
+                .user_failure("insufficientBalance")
+                .unwrap()
+                .history_entry(time)
+        )
+        .await
+        .unwrap(),
+        UserMissing
+    );
+    assert!(users.find_one(doc! {"user":999}).await.unwrap().is_none());
+    other.chat_id = 44;
+    assert!(
+        repo.append_failure(
+            &other
+                .user_failure("insufficientBalance")
+                .unwrap()
+                .history_entry(time)
+        )
+        .await
+        .is_err()
+    );
+
+    // A different reason for the same job has its own identity.
+    assert_eq!(
+        repo.append_failure(
+            &context
+                .user_failure("leverageChangeBlocked")
+                .unwrap()
+                .history_entry(time)
+        )
+        .await
+        .unwrap(),
+        Appended
+    );
+    for index in 0..9 {
+        other = context.clone();
+        other.idempotency_key = format!("job-{index}");
+        let entry = other
+            .user_failure("insufficientBalance")
+            .unwrap()
+            .history_entry(DateTime::from_millis(index));
+        assert_eq!(repo.append_failure(&entry).await.unwrap(), Appended);
+    }
+    let saved = users.find_one(doc! {"user":42}).await.unwrap().unwrap();
+    assert_eq!(saved.get_document("settings"), Ok(&settings));
+    let history = saved.get_array("lastNotifications").unwrap();
+    assert_eq!(history.len(), USER_NOTIFICATION_LIMIT);
+    for (index, notice) in history.iter().enumerate() {
+        assert_eq!(
+            notice.as_document().unwrap().get_str("time").unwrap(),
+            DateTime::from_millis(index as i64 + 2)
+                .try_to_rfc3339_string()
+                .unwrap()
+        );
+    }
+    // Suppression intentionally ends once an ID leaves the retained window.
+    assert_eq!(repo.append_failure(&entry).await.unwrap(), Appended);
     mongo.close().await.unwrap();
 }

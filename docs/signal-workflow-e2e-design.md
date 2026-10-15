@@ -114,8 +114,8 @@ repeatable inputs; it does not establish live BingX behavior or duplicate safety
 ```
 
 Requires Cargo, RabbitMQ/Erlang, MongoDB and Redis on PATH (the script also checks
-Homebrew binary locations). The suite runs 14 scenarios sequentially and prints
-sanitized final payloads and a PASS journal for each. Ten final envelopes are
+Homebrew binary locations). The suite runs 21 scenarios sequentially and prints
+sanitized final payloads and a PASS journal for each. Fifteen final envelopes are
 expected across the successful cases, including two separate user overrides.
 
 The expired-job scenario deliberately injects an already-expired client job into
@@ -127,3 +127,7 @@ scripts; this suite does not call either live API.
 The HTTP fixture has ordinary unit tests for bad signatures, wrong parameters,
 phase ordering and unexpected requests. The integration matrix is ignored during
 ordinary `cargo test` and included by `./scripts/verify.sh`.
+
+The parser extension adds all four profit-target/stop-loss combinations,
+metadata equivalence, regular-message detection and mixed-command rejection.
+Optional exits are preserved through final publication without fabricated prices.

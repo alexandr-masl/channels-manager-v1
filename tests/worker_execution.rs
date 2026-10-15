@@ -113,7 +113,7 @@ async fn dependency_rejections_and_retryable_reads_are_distinct() {
             .await;
         assert_eq!(matches!(result, WorkerOutcome::Retryable(_)), retry);
         if !retry {
-            assert!(matches!(result, WorkerOutcome::Rejected(_)));
+            assert!(matches!(result, WorkerOutcome::RejectedForUser { .. }));
         }
     }
 }
@@ -244,4 +244,131 @@ async fn worker_timeout_after_leverage_started_rejects_without_retry() {
             )
         )
     ));
+}
+
+#[tokio::test]
+async fn business_rejections_preserve_validated_context_without_credentials() {
+    for reason in [
+        "insufficientBalance",
+        "positionExceedsBalance",
+        "insufficientTargetBalance",
+        "leverageLimitExceeded",
+        "leverageChangeBlocked",
+        "migrationRequired",
+    ] {
+        let deps = Dependencies {
+            calls: AtomicUsize::new(0),
+            failure: Some(AdmissionFailure::Rejected(reason)),
+            stall: false,
+        };
+        let mut job: ClientTradeJob = serde_json::from_slice(&body()).unwrap();
+        job.client["name"] = json!("BingX-1");
+        let result = ClientTradeWorker::new(&deps, Duration::from_secs(1))
+            .prepare(&serde_json::to_vec(&job).unwrap(), || 1)
+            .await;
+        let notice = result.notification().expect("user business failure");
+        assert_eq!(notice.failure.reason(), reason);
+        assert_eq!(notice.context.chat_id, 42);
+        assert_eq!(notice.context.account_id, "account-1");
+        assert_eq!(notice.context.account_name, "BingX-1");
+        assert_eq!(notice.context.symbol, "BTC-USDT");
+        assert_eq!(notice.context.channel_id, -100);
+        assert_eq!(notice.context.message_id, 7);
+        assert_eq!(notice.context.idempotency_key, job.idempotency_key);
+        let diagnostic = format!("{notice:?}");
+        assert!(!diagnostic.contains("secret-key"));
+        assert!(!diagnostic.contains("secret-secret"));
+        assert_eq!(deps.calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn malformed_jobs_and_internal_outcomes_cannot_supply_notification_context() {
+    let deps = Dependencies {
+        calls: AtomicUsize::new(0),
+        failure: Some(AdmissionFailure::Rejected("insufficientBalance")),
+        stall: false,
+    };
+    let worker = ClientTradeWorker::new(&deps, Duration::from_secs(1));
+    assert!(
+        worker
+            .prepare(b"bad-json", || 1)
+            .await
+            .notification()
+            .is_none()
+    );
+    for (field, value) in [
+        ("chatId", json!(99)),
+        ("clientId", json!("other-account")),
+        ("key", json!(null)),
+    ] {
+        let mut job: ClientTradeJob = serde_json::from_slice(&body()).unwrap();
+        job.client[field] = value;
+        assert!(
+            worker
+                .prepare(&serde_json::to_vec(&job).unwrap(), || 1)
+                .await
+                .notification()
+                .is_none()
+        );
+    }
+    let mut job: ClientTradeJob = serde_json::from_slice(&body()).unwrap();
+    job.channel_settings = json!({});
+    assert!(
+        worker
+            .prepare(&serde_json::to_vec(&job).unwrap(), || 1)
+            .await
+            .notification()
+            .is_none()
+    );
+    assert!(
+        worker
+            .prepare(&body(), || 1000)
+            .await
+            .notification()
+            .is_none()
+    );
+    assert_eq!(deps.calls.load(Ordering::SeqCst), 0);
+    for failure in [
+        None,
+        Some(AdmissionFailure::Rejected("invalidExchangeResponse")),
+        Some(AdmissionFailure::Rejected("modeSwitchFailed")),
+        Some(AdmissionFailure::Retryable("exchangeReadUnavailable")),
+    ] {
+        let deps = Dependencies {
+            calls: AtomicUsize::new(0),
+            failure,
+            stall: false,
+        };
+        assert!(
+            ClientTradeWorker::new(&deps, Duration::from_secs(1))
+                .prepare(&body(), || 1)
+                .await
+                .notification()
+                .is_none()
+        );
+    }
+}
+
+#[tokio::test]
+async fn prepared_account_retains_context_for_builder_failures() {
+    let deps = Dependencies {
+        calls: AtomicUsize::new(0),
+        failure: None,
+        stall: false,
+    };
+    let WorkerOutcome::Admitted(prepared) = ClientTradeWorker::new(&deps, Duration::from_secs(1))
+        .prepare(&body(), || 1)
+        .await
+    else {
+        panic!("admitted")
+    };
+    let notice = prepared.user_failure("positionExceedsBalance").unwrap();
+    assert_eq!(notice.context.chat_id, 42);
+    assert_eq!(notice.context.account_id, "account-1");
+    assert_eq!(notice.context.account_name, "BingX");
+    assert_eq!(notice.context.symbol, "BTC-USDT");
+    assert_eq!(notice.context.idempotency_key, prepared.job.idempotency_key);
+    assert!(prepared.user_failure("invalidCalculatedAmount").is_none());
+    assert_eq!(prepared.job.trade_expires_at, Some(1000));
 }

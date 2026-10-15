@@ -37,7 +37,8 @@ impl DeliveryHandler for TelegramHandler {
                     {
                         Ok(ChannelOutcome::Ready(context)) => {
                             println!(
-                                "Signal parsed: channel_id={channel_id} message_id={message_id} result={}",
+                                "Signal parsed: channel_id={channel_id} message_id={message_id} ignored_lines={} result={}",
+                                context.signal.ignored_lines,
                                 serde_json::to_string(&context.signal)
                                     .map_err(|_| RabbitError::InvalidPayload)?
                             );

@@ -1,4 +1,5 @@
 use super::execution::{ClientTradeWorker, ProductionAdmission, WorkerOutcome};
+use super::notifications::report_rejection;
 use crate::{
     infrastructure::{DeliveryHandler, WorkerServices},
     rabbitmq::{DeliveryOutcome, InboundDelivery, RabbitError, RetryReason},
@@ -71,13 +72,30 @@ impl DeliveryHandler for ClientTradeHandler {
                         }
                         Err(TradeBuildError::Rejected(reason)) => {
                             println!("Client trade rejected: reason={reason}");
-                            DeliveryOutcome::Rejected
+                            report_rejection(
+                                prepared.user_failure(reason).as_ref(),
+                                &services.mongo.notifications,
+                                services.operation_timeout,
+                            )
+                            .await
                         }
                     }
                 }
                 WorkerOutcome::Rejected(reason) => {
                     println!("Client job rejected: reason={reason:?}");
                     DeliveryOutcome::Rejected
+                }
+                WorkerOutcome::RejectedForUser {
+                    reason,
+                    notification,
+                } => {
+                    println!("Client job rejected: reason={reason:?}");
+                    report_rejection(
+                        Some(&notification),
+                        &services.mongo.notifications,
+                        services.operation_timeout,
+                    )
+                    .await
                 }
                 WorkerOutcome::Expired => {
                     println!("Client job expired");

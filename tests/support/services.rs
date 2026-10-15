@@ -44,6 +44,7 @@ impl Stores {
         std::fs::create_dir_all(&path).unwrap();
         let mongo = Command::new(std::env::var("MONGOD_BIN").unwrap_or_else(|_| "mongod".into()))
             .args(["--bind_ip", "127.0.0.1", "--port", &mongo_port.to_string()])
+            .args(["--setParameter", "enableTestCommands=1"])
             .arg("--dbpath")
             .arg(&path)
             .stdout(Stdio::null())

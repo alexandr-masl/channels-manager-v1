@@ -83,7 +83,6 @@ fn breakout_and_ignored_labels_do_not_bypass_validation() {
             base.replace("Tg2", "Tg4"),
             base.replace("3x", "-3x"),
             format!("{base}\nPOSITION SIZE -0.5%"),
-            format!("{base}\nUNKNOWN SETTING 10%"),
         ] {
             assert!(
                 matches!(parse_signal(&text), ParseOutcome::Rejected(_)),
@@ -184,7 +183,6 @@ fn incomplete_and_ambiguous_signals_are_rejected() {
         ADA.replace("LONG", ""),
         ADA.replace("LONG", "").replace("LEVERAGE 3x", ""),
         ADA.replace("LONG", "LONG SHORT"),
-        ADA.replace("⚜️SL Hard at 0.18", ""),
         ADA.replace("#ADA/USDT", "#ADA/BTC"),
         ADA.replace("#ADA/USDT", "#ADA/USDT #BTC/USDT"),
         format!("{ADA}\nLEVERAGE 5x"),
@@ -232,7 +230,6 @@ fn validates_direction_and_rejects_unknown_instructions() {
         ADA.replace("0.18", "0.30"),
         ADA.replace("0.26", "0.20"),
         ADA.replace("0.27", "0.26"),
-        format!("{ADA}\nUNKNOWN SETTING 10%"),
         ADA.replace("0.27", "0.29"),
     ] {
         assert!(
@@ -389,7 +386,7 @@ fn supported_entry_target_and_stop_labels_are_interchangeable() {
                 let signal = expect_signal(&text);
                 assert_eq!(signal.buy_targets, ["100"]);
                 assert_eq!(signal.sell_targets, ["110", "120"]);
-                assert_eq!(signal.stop_loss, "90");
+                assert_eq!(signal.stop_loss.as_deref(), Some("90"));
             }
         }
     }
@@ -427,7 +424,7 @@ fn decimal_spelling_is_preserved_without_numeric_reserialization() {
     let signal = expect_signal("DOGEUSDT LONG\nENTRY .25 0.2500\nTP1 01.00\nLEVERAGE 3.0x\nSL .10");
     assert_eq!(signal.buy_targets, [".25", "0.2500"]);
     assert_eq!(signal.sell_targets, ["01.00"]);
-    assert_eq!(signal.stop_loss, ".10");
+    assert_eq!(signal.stop_loss.as_deref(), Some(".10"));
     assert_eq!(signal.leverage.as_deref(), Some("3.0x"));
 }
 
@@ -477,8 +474,6 @@ fn short_price_ordering_and_entry_boundaries_are_checked() {
 #[test]
 fn missing_duplicate_and_unsupported_settings_cannot_be_guessed() {
     for text in [
-        ADA.replace("⚜️Entry Zone 0.2570", ""),
-        ADA.replace("⚜️Tg1 0.26\n⚜️Tg2 0.27\n⚜️Tg3 0.28\n", ""),
         ADA.replace("LONG", "BUY"),
         ADA.replace("#ADA/USDT", "#ADA/USDC"),
         ADA.replace("#ADA/USDT", "#ADA//USDT"),
@@ -495,4 +490,141 @@ fn missing_duplicate_and_unsupported_settings_cannot_be_guessed() {
             "{text}"
         );
     }
+}
+
+#[test]
+fn commentary_is_ignored_without_supplying_trading_values() {
+    let signal = serde_json::to_value(expect_signal(ADA)).unwrap();
+    for text in [
+        format!("VANERIX TEST ONLY | VQA-20261011-901 | SINGLE_TARGET_MARKET\n{ADA}"),
+        format!("{ADA}\nThanks for following our channel. Reference 12345."),
+        ADA.replace(
+            "⚜️Tg1",
+            "Analysis mentions BTCUSDT SHORT and BREAKOUT in prose\n⚜️Tg1",
+        ),
+    ] {
+        assert_eq!(serde_json::to_value(expect_signal(&text)).unwrap(), signal);
+    }
+    let reported = "VANERIX TEST ONLY | VQA-20261011-901 | SINGLE_TARGET_MARKET\n⚜️#BTC/USDT |SCALP LONG\n⚜️Entry Zone 83827.1-83987.2\n⚜️TG1 84087.2\n⚜️LEVERAGE 5x\n⚜️POSITION SIZE 1%\n⚜️SL 83707.1";
+    let parsed = expect_signal(reported);
+    assert_eq!(parsed.symbol, "BTCUSDT");
+    assert_eq!(parsed.buy_targets, ["83827.1", "83987.2"]);
+    assert_eq!(parsed.position, Some(0.01));
+    assert_eq!(parsed.breakout_entry, None);
+}
+
+#[test]
+fn exits_are_independently_optional() {
+    for side in ["LONG", "SHORT"] {
+        for targets in [false, true] {
+            for stop in [false, true] {
+                let text = format!(
+                    "BTCUSDT {side}\nENTRY 100\n{}{}",
+                    if targets {
+                        if side == "LONG" {
+                            "TG1 110\n"
+                        } else {
+                            "TG1 90\n"
+                        }
+                    } else {
+                        ""
+                    },
+                    if stop {
+                        if side == "LONG" { "SL 90" } else { "SL 110" }
+                    } else {
+                        ""
+                    }
+                );
+                let signal = serde_json::to_value(expect_signal(&text)).unwrap();
+                assert_eq!(
+                    signal["sell_targets"].as_array().unwrap().len(),
+                    usize::from(targets)
+                );
+                assert_eq!(signal.get("stop_loss").is_some(), stop);
+            }
+        }
+    }
+}
+
+#[test]
+fn structural_fields_distinguish_signals_from_prose_and_conflicts() {
+    for text in [
+        "BTCUSDT LONG today, entry is still uncertain",
+        "BTCUSDT LONG\nPrice 100\nSL 90",
+        "Entry opportunities look good for BTCUSDT LONG",
+        "#BTC/USDT LONG",
+        "Close BTCUSDT",
+    ] {
+        assert!(
+            matches!(parse_signal(text), ParseOutcome::NotSignal),
+            "{text}"
+        );
+    }
+    for suffix in [
+        "CLOSE",
+        "CANCEL",
+        "MOVE SL TO ENTRY",
+        "EDIT TARGET 120",
+        "TGx 110",
+        "SL abc",
+        "LEVERAGE abc",
+        "#ETH/USDT LONG",
+    ] {
+        let text = format!("BTCUSDT LONG\nENTRY 100\n{suffix}");
+        assert!(
+            matches!(parse_signal(&text), ParseOutcome::Rejected(_)),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn prose_cannot_complete_a_header_or_enable_breakout() {
+    let core = "BTCUSDT LONG\nENTRY 100";
+    let expected = serde_json::to_value(expect_signal(core)).unwrap();
+    for prose in [
+        "BTCUSDT is currently consolidating",
+        "LONG term holders should wait",
+        "BREAKOUT could happen tomorrow",
+        "#ChannelSignature",
+        "ANALYSIS BTCUSDT SHORT BREAKOUT",
+    ] {
+        assert_eq!(
+            serde_json::to_value(expect_signal(&format!("{core}\n{prose}"))).unwrap(),
+            expected
+        );
+    }
+    assert!(matches!(
+        parse_signal("BTCUSDT\nENTRY 100\nLONG term analysis discusses BREAKOUT next week"),
+        ParseOutcome::Rejected(_)
+    ));
+    assert!(matches!(
+        parse_signal("BTCUSDT LONG\nENTRY 100\n#ETH LONG"),
+        ParseOutcome::Rejected(_)
+    ));
+}
+
+#[test]
+fn field_errors_include_original_line_number() {
+    let ParseOutcome::Rejected(channels_manager_v1::signals::SignalError::AtLine {
+        line,
+        field,
+        ..
+    }) = parse_signal("BTCUSDT LONG\n\nENTRY 100\n\nSL abc")
+    else {
+        panic!("line diagnostic required")
+    };
+    assert_eq!(line, 5);
+    assert_eq!(field, "SL");
+}
+
+#[test]
+fn separate_direction_headers_preserve_validation() {
+    assert!(matches!(
+        parse_signal("BTCUSDT LONG\nENTRY 100\nLONG SHORT"),
+        ParseOutcome::Rejected(_)
+    ));
+    let parsed = expect_signal("BTCUSDT\nLONG |SWING\nENTRY 100");
+    assert!(parsed.is_long);
+    assert_eq!(parsed.symbol, "BTCUSDT");
 }

@@ -3,9 +3,11 @@ use super::{
     services::{Broker, Stores},
 };
 use channels_manager_v1::contracts::rabbitmq::*;
+use channels_manager_v1::trading::notifications::UserFailure;
 use lapin::{BasicProperties, Connection, ConnectionProperties, options::*, types::FieldTable};
 use mongodb::bson::{DateTime, Document, doc};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     io::{BufRead, BufReader},
     process::{Child, Command, Stdio},
@@ -62,6 +64,15 @@ pub struct Scenario {
     pub post_fails: bool,
     pub telegram_fails: bool,
     pub expired: bool,
+    pub malformed: bool,
+    pub balance: &'static str,
+    pub max_leverage: u32,
+    pub history_write_failures: bool,
+    pub targets: bool,
+    pub stop: bool,
+    pub decorated: bool,
+    pub raw_text: Option<&'static str>,
+    pub channel_terminal: Option<&'static str>,
 }
 impl Scenario {
     pub fn base(name: &'static str, signal: Signal, leverage: u32) -> Self {
@@ -77,17 +88,69 @@ impl Scenario {
             post_fails: false,
             telegram_fails: false,
             expired: false,
+            malformed: false,
+            balance: "1000",
+            max_leverage: 100,
+            history_write_failures: false,
+            targets: true,
+            stop: true,
+            decorated: false,
+            raw_text: None,
+            channel_terminal: None,
         }
     }
     fn publishes(&self) -> bool {
-        !self.resolved.is_empty() && !self.blocked && !self.post_fails && !self.expired
+        !self.resolved.is_empty()
+            && !self.blocked
+            && !self.post_fails
+            && !self.expired
+            && !self.malformed
+            && self.balance != "0"
+            && self
+                .resolved
+                .iter()
+                .all(|value| *value <= self.max_leverage)
+            && self.channel_terminal.is_none()
+    }
+    fn failure_reason(&self) -> Option<&'static str> {
+        if self.blocked {
+            Some("leverageChangeBlocked")
+        } else if self.resolved.iter().any(|value| *value > self.max_leverage) {
+            Some("leverageLimitExceeded")
+        } else if self.balance == "0" {
+            Some("insufficientBalance")
+        } else {
+            None
+        }
+    }
+    fn text(&self) -> String {
+        if let Some(text) = self.raw_text {
+            return text.to_owned();
+        }
+        let text = self
+            .signal
+            .text()
+            .lines()
+            .filter(|line| {
+                (self.targets || !line.contains("Tg")) && (self.stop || !line.contains("SL"))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if self.decorated {
+            format!(
+                "VANERIX SINGLE_TARGET_MARKET — TEST ONLY\nReference VQA-83827.1-83987.2\n{}\nCommentary: BREAKOUT remains a possibility at 84087.2\n— Team 83707.1",
+                text.replacen('\n', "\nCampaign reference 99999\n", 1)
+            )
+        } else {
+            text
+        }
     }
 }
 fn response(data: Value) -> Value {
     json!({"code":0,"data":data})
 }
 fn http_script(s: &Scenario) -> Vec<Vec<Expected>> {
-    if s.expired {
+    if s.expired || s.malformed || s.channel_terminal.is_some() {
         return vec![];
     }
     let symbol = s.signal.symbol();
@@ -139,8 +202,8 @@ fn http_script(s: &Scenario) -> Vec<Vec<Expected>> {
             Expected::new("GET","/openApi/swap/v1/positionSide/dual",&[],true,response(json!({"dualSidePosition":s.mode==Mode::Hedge}))),
             Expected::new("GET","/openApi/swap/v2/user/positions",&[],true,response(positions)),
             Expected::new("GET","/openApi/swap/v2/trade/openOrders",&[],true,response(json!({"orders":[]}))),
-            Expected::new("GET","/openApi/swap/v3/user/balance",&[],true,response(json!([{"asset":"USDT","availableMargin":"1000"}]))),
-            Expected::new("GET","/openApi/swap/v2/trade/leverage",&[("symbol",symbol)],true,response(json!({"longLeverage":s.current_leverage,"shortLeverage":s.current_leverage,"maxLongLeverage":100,"maxShortLeverage":100}))),
+            Expected::new("GET","/openApi/swap/v3/user/balance",&[],true,response(json!([{"asset":"USDT","availableMargin":s.balance}]))),
+            Expected::new("GET","/openApi/swap/v2/trade/leverage",&[("symbol",symbol)],true,response(json!({"longLeverage":s.current_leverage,"shortLeverage":s.current_leverage,"maxLongLeverage":s.max_leverage,"maxShortLeverage":s.max_leverage}))),
         ]);
         if s.mode == Mode::Switch {
             phases.push(vec![Expected::new(
@@ -151,7 +214,7 @@ fn http_script(s: &Scenario) -> Vec<Vec<Expected>> {
                 response(json!({})),
             )]);
         }
-        if *leverage != s.current_leverage && !s.blocked {
+        if *leverage != s.current_leverage && s.failure_reason().is_none() {
             let mut post = Expected::new(
                 "POST",
                 "/openApi/swap/v2/trade/leverage",
@@ -305,11 +368,26 @@ pub async fn run(broker: &Broker, s: Scenario) {
     for (index, over) in s.overrides.iter().enumerate() {
         let user = 42 + index as i64;
         let account = format!("account-{user}");
-        bot.collection::<Document>("tradingprofiles").insert_one(doc!{"userId":user,"exchangeClients":[{"clientId":account,"provider":"BingX","connectedChannel":CHANNEL,"api_key":"fixture-key","api_secret":"fixture-secret"}]}).await.unwrap();
+        bot.collection::<Document>("tradingprofiles").insert_one(doc!{"userId":user,"exchangeClients":[{"clientId":account,"name":"BingX-1","provider":"BingX","connectedChannel":CHANNEL,"api_key":"fixture-key","api_secret":"fixture-secret"}]}).await.unwrap();
         mongo.database("accounts").collection::<Document>("users").insert_one(doc!{"tg_chat_id":user,"auto_trading":true,"valid_till":DateTime::from_millis(DateTime::now().timestamp_millis()+120000)}).await.unwrap();
         if let Some(leverage) = over {
             bot.collection::<Document>("user_configs").insert_one(doc!{"user":user,"private_channels":[{"id":CHANNEL,"own_settings":true,"futures":{"active":true,"leverage":mongodb::bson::to_bson(leverage).unwrap()}}]}).await.unwrap();
+        } else {
+            bot.collection::<Document>("user_configs")
+                .insert_one(doc! {"user":user,"lastNotifications":[{"info":"existing notice","time":"original"}]})
+                .await
+                .unwrap();
         }
+    }
+    if s.history_write_failures {
+        mongo
+            .database("admin")
+            .run_command(doc! {
+                "configureFailPoint":"failCommand", "mode":{"times":2},
+                "data":{"failCommands":["update"],"errorCode":2}
+            })
+            .await
+            .unwrap();
     }
     // Exercise the managed-trade repository with an unrelated, completed row.
     mongo.database("trading").collection::<Document>("trade_station_active_trades").insert_one(doc!{"_id":"historical","state":"FINISHED","chat_id":42,"exchangeClientId":"account-42","exchange_client":"_binance_futures_","symbol":"ETH-USDT"}).await.unwrap();
@@ -331,18 +409,20 @@ pub async fn run(broker: &Broker, s: Scenario) {
         .await
         .unwrap();
     let started = DateTime::now().timestamp_millis();
-    let body = if s.expired {
+    let body = if s.malformed {
+        b"{invalid job".to_vec()
+    } else if s.expired {
         let mut job: Value =
             serde_json::from_str(include_str!("../fixtures/admission-job.json")).unwrap();
         job["tradeExpiresAt"] = json!(started - 1);
         serde_json::to_vec(&job).unwrap()
     } else {
-        serde_json::to_vec(&json!({"message_id":7,"date":started/1000,"chat":{"id":CHANNEL,"type":"channel"},"text":s.signal.text().trim_end()})).unwrap()
+        serde_json::to_vec(&json!({"message_id":7,"date":started/1000,"chat":{"id":CHANNEL,"type":"channel"},"text":s.text()})).unwrap()
     };
     let confirmed = channel
         .basic_publish(
             "".into(),
-            if s.expired {
+            if s.expired || s.malformed {
                 BINGX_FUTURES_QUEUE
             } else {
                 TELEGRAM_CHANNEL_QUEUE
@@ -366,7 +446,11 @@ pub async fn run(broker: &Broker, s: Scenario) {
     let count = s.resolved.len();
     process
         .wait_for(|lines| {
-            if s.expired {
+            if let Some(terminal) = s.channel_terminal {
+                lines.iter().any(|line| line.starts_with(terminal))
+            } else if s.malformed {
+                lines.iter().any(|l| l.starts_with("Client job rejected:"))
+            } else if s.expired {
                 lines.iter().any(|l| l == "Client job expired")
             } else if count == 0 {
                 lines
@@ -385,14 +469,25 @@ pub async fn run(broker: &Broker, s: Scenario) {
             }
         })
         .await;
+    if s.failure_reason().is_some() {
+        process
+            .wait_for(|lines| {
+                lines
+                    .iter()
+                    .filter(|line| line.starts_with("user_failure_notification_saved:"))
+                    .count()
+                    == count
+            })
+            .await;
+    }
     process.stop().await;
     http.assert_complete();
     let journal = process.journal.lock().unwrap().clone();
-    let expected_rejection = if s.blocked {
-        Some("leverageChangeBlocked")
+    let expected_rejection = if let Some(reason) = s.failure_reason() {
+        Some(reason)
     } else if s.post_fails {
         Some("leverageChangeFailed")
-    } else if !s.expired && count == 0 {
+    } else if !s.expired && !s.malformed && s.channel_terminal.is_none() && count == 0 {
         Some("NoValidLeverage")
     } else {
         None
@@ -404,12 +499,78 @@ pub async fn run(broker: &Broker, s: Scenario) {
             s.name
         );
     }
+    for index in 0..s.overrides.len() {
+        let user = bot
+            .collection::<Document>("user_configs")
+            .find_one(doc! {"user":42 + index as i64})
+            .await
+            .unwrap()
+            .unwrap();
+        let history = user
+            .get_array("lastNotifications")
+            .cloned()
+            .unwrap_or_default();
+        let existing = usize::from(s.overrides[index].is_none());
+        if existing == 1 {
+            assert_eq!(
+                history[0].as_document().unwrap(),
+                &doc! {"info":"existing notice","time":"original"}
+            );
+        }
+        assert_eq!(
+            history.len(),
+            existing + usize::from(s.failure_reason().is_some()),
+            "history for {}",
+            s.name
+        );
+        if let Some(reason) = s.failure_reason() {
+            let notice = history[existing].as_document().unwrap();
+            assert_eq!(
+                notice.get_str("info").unwrap(),
+                UserFailure::from_reason(reason)
+                    .unwrap()
+                    .format(s.signal.symbol(), "BingX-1")
+            );
+            let user_id = 42 + index as i64;
+            let job_key = format!(
+                "auto-trade:{CHANNEL}:7:{user_id}:account-{user_id}:BingX:futures:{}",
+                s.signal.symbol().replace('-', "")
+            );
+            let event_id = format!(
+                "{:x}",
+                Sha256::digest(format!("user-failure:{job_key}:{reason}").as_bytes())
+            );
+            assert_eq!(notice.get_str("eventId").unwrap(), event_id);
+            let recorded_at = DateTime::parse_rfc3339_str(notice.get_str("time").unwrap())
+                .unwrap()
+                .timestamp_millis();
+            assert!(recorded_at >= started && recorded_at <= DateTime::now().timestamp_millis());
+        }
+    }
+    if s.history_write_failures {
+        let state = mongo
+            .database("admin")
+            .run_command(doc! {"configureFailPoint":"failCommand","mode":"off"})
+            .await
+            .unwrap();
+        assert_eq!(
+            state.get_i32("count"),
+            Ok(2),
+            "both injected history failures must occur"
+        );
+        assert!(
+            !journal
+                .iter()
+                .any(|line| line.starts_with("Client job retry:")
+                    || line.starts_with("user_failure_notification_save_failed:"))
+        );
+    }
 
     let summary = journal.iter().find_map(|l| {
         l.strip_prefix("Signal published: ")
             .and_then(|v| serde_json::from_str::<Value>(v).ok())
     });
-    if !s.expired && count > 0 {
+    if !s.expired && !s.malformed && s.channel_terminal.is_none() && count > 0 {
         let summary = summary.as_ref().expect("signal publication summary");
         assert_eq!(summary["published_jobs"], count);
         assert!(summary["accepted_at_ms"].as_i64().unwrap() >= started);
@@ -418,6 +579,45 @@ pub async fn run(broker: &Broker, s: Scenario) {
             summary["expires_at_ms"].as_i64().unwrap(),
             summary["accepted_at_ms"].as_i64().unwrap() + 60000
         );
+    }
+    if let Some(terminal) = s.channel_terminal {
+        let reason = if terminal.ends_with("skipped:") {
+            "NotSignal"
+        } else {
+            "AmbiguousInstruction"
+        };
+        assert!(
+            journal
+                .iter()
+                .any(|line| line.starts_with(terminal) && line.contains(reason)),
+            "{}: {journal:?}",
+            s.name
+        );
+        assert!(summary.is_none());
+        assert!(
+            !journal
+                .iter()
+                .any(|line| line.starts_with("Signal parsed:"))
+        );
+    }
+    if matches!(s.signal, Signal::Ada) && !s.expired && !s.malformed && s.channel_terminal.is_none()
+    {
+        let line = journal
+            .iter()
+            .find(|line| line.starts_with("Signal parsed:"))
+            .unwrap();
+        let parsed: Value = serde_json::from_str(line.split_once("result=").unwrap().1).unwrap();
+        let mut expected = json!({"exchange_client":"_futures","symbol":"ADAUSDT","base_currency":"USDT","coin":"ADA","is_long":true,"buy_targets":["0.217"],"sell_targets":["0.22","0.23","0.24"],"stop_loss":"0.18","leverage":"3x"});
+        if !s.targets {
+            expected["sell_targets"] = json!([]);
+        }
+        if !s.stop {
+            expected.as_object_mut().unwrap().remove("stop_loss");
+        }
+        assert_eq!(parsed, expected, "extracted data for {}", s.name);
+        if s.decorated {
+            assert!(line.contains("ignored_lines=5 "), "{line}");
+        }
     }
     if matches!(s.signal, Signal::Sol) {
         let parsed: Value = serde_json::from_str(
@@ -519,6 +719,17 @@ fn expected(s: &Scenario, index: usize) -> Value {
         },
     };
     let mut value: Value = serde_json::from_str(fixture).unwrap();
+    value["client_data"]["name"] = json!("BingX-1");
+    value["trade_object"]["auto_Trade"]["exchangeClientName"] = json!("BingX-1");
+    if !s.targets {
+        value["trade_object"]["sell_targets"] = json!([]);
+    }
+    if !s.stop {
+        value["trade_object"]
+            .as_object_mut()
+            .unwrap()
+            .remove("stop_loss");
+    }
     if s.mode == Mode::OneWay {
         value["trade_object"]["positionConfiguration"]["accountingModel"] = json!("ONE_WAY_V1");
     }

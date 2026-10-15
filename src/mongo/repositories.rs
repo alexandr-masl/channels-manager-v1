@@ -1,5 +1,6 @@
 use super::{ClaimStore, MongoError, MongoRole, error::bounded};
 use crate::contracts::storage::*;
+use crate::trading::notifications::FailureHistoryEntry;
 use futures_util::TryStreamExt;
 use mongodb::{
     Collection, Database,
@@ -106,7 +107,47 @@ pub struct NotificationRepository {
     collection: Collection<Document>,
     timeout: Duration,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureNotificationOutcome {
+    Appended,
+    AlreadyPresent,
+    UserMissing,
+}
+
 impl NotificationRepository {
+    /// Atomic suppression while the event remains in the newest-seven history.
+    pub async fn append_failure(
+        &self,
+        entry: &FailureHistoryEntry,
+    ) -> Result<FailureNotificationOutcome, MongoError> {
+        bounded(MongoRole::Bot, self.timeout, async {
+            let result = self
+                .collection
+                .update_one(
+                    doc! {"user":entry.chat_id,"lastNotifications.eventId":{"$ne":&entry.event_id}},
+                    doc! {"$push":{"lastNotifications":{
+                        "$each":[{"eventId":&entry.event_id,"info":&entry.info,"time":&entry.time}],
+                        "$slice":-(USER_NOTIFICATION_LIMIT as i32)
+                    }}},
+                )
+                .await?;
+            if result.matched_count == 1 {
+                return Ok(FailureNotificationOutcome::Appended);
+            }
+            let user = self
+                .collection
+                .find_one(doc! {"user":entry.chat_id})
+                .projection(doc! {"_id":1})
+                .await?;
+            Ok(if user.is_some() {
+                FailureNotificationOutcome::AlreadyPresent
+            } else {
+                FailureNotificationOutcome::UserMissing
+            })
+        })
+        .await
+    }
+
     /// No upsert: only existing users receive notifications, retaining the newest seven.
     pub async fn add_user_notification(
         &self,
