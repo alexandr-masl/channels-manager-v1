@@ -22,6 +22,7 @@ pub enum Signal {
     Ada,
     Sol,
     Missing,
+    Xlm,
 }
 impl Signal {
     fn text(self) -> &'static str {
@@ -29,13 +30,14 @@ impl Signal {
             Self::Ada => include_str!("../fixtures/signals/ada-3x.txt"),
             Self::Sol => include_str!("../fixtures/signals/sol-50x.txt"),
             Self::Missing => include_str!("../fixtures/signals/ada-no-leverage.txt"),
+            Self::Xlm => include_str!("../fixtures/signals/xlm-8x.txt"),
         }
     }
     fn symbol(self) -> &'static str {
-        if matches!(self, Self::Sol) {
-            "SOL-USDT"
-        } else {
-            "ADA-USDT"
+        match self {
+            Self::Sol => "SOL-USDT",
+            Self::Xlm => "XLM-USDT",
+            _ => "ADA-USDT",
         }
     }
     fn price(self) -> &'static str {
@@ -43,6 +45,7 @@ impl Signal {
             Self::Ada => "0.217",
             Self::Sol => "72.00",
             Self::Missing => "0.2570",
+            Self::Xlm => "0.188920",
         }
     }
 }
@@ -73,6 +76,14 @@ pub struct Scenario {
     pub decorated: bool,
     pub raw_text: Option<&'static str>,
     pub channel_terminal: Option<&'static str>,
+    pub rejection_reason: Option<&'static str>,
+    pub percentage: Option<PercentageExpectation>,
+}
+pub struct PercentageExpectation {
+    pub parsed: Value,
+    pub prices: Vec<Vec<&'static str>>,
+    /// Per-user selected entries: price, fraction, executable quantity.
+    pub entries: Vec<Vec<(&'static str, f64, f64)>>,
 }
 impl Scenario {
     pub fn base(name: &'static str, signal: Signal, leverage: u32) -> Self {
@@ -97,6 +108,8 @@ impl Scenario {
             decorated: false,
             raw_text: None,
             channel_terminal: None,
+            rejection_reason: None,
+            percentage: None,
         }
     }
     fn publishes(&self) -> bool {
@@ -226,7 +239,14 @@ fn http_script(s: &Scenario) -> Vec<Vec<Expected>> {
                         if s.mode == Mode::OneWay {
                             "BOTH"
                         } else {
-                            "LONG"
+                            if s.percentage
+                                .as_ref()
+                                .is_some_and(|expected| expected.parsed["is_long"] == false)
+                            {
+                                "SHORT"
+                            } else {
+                                "LONG"
+                            }
                         },
                     ),
                 ],
@@ -355,6 +375,16 @@ pub async fn run(broker: &Broker, s: Scenario) {
         .unwrap();
     let bot = mongo.database("bot");
     let mut channel = doc! {"id":CHANNEL,"default_quantity":0.1,"default_buy_targets":[{"fraction":0.5},{"fraction":0.5}],"default_sell_targets":[{"fraction":0.5},{"fraction":0.5}],"strategy":"basic","futures":{"active":true}};
+    if let Some(expected) = &s.percentage {
+        channel.insert(
+            "default_buy_targets",
+            expected.entries[0]
+                .iter()
+                .map(|(_, fraction, _)| doc! {"fraction":fraction})
+                .collect::<Vec<_>>(),
+        );
+        channel.insert("default_sell_targets", vec![doc! {"fraction":0.25}; 4]);
+    }
     if let Some(leverage) = &s.channel_leverage {
         channel
             .get_document_mut("futures")
@@ -483,7 +513,9 @@ pub async fn run(broker: &Broker, s: Scenario) {
     process.stop().await;
     http.assert_complete();
     let journal = process.journal.lock().unwrap().clone();
-    let expected_rejection = if let Some(reason) = s.failure_reason() {
+    let expected_rejection = if let Some(reason) = s.rejection_reason {
+        Some(reason)
+    } else if let Some(reason) = s.failure_reason() {
         Some(reason)
     } else if s.post_fails {
         Some("leverageChangeFailed")
@@ -581,7 +613,9 @@ pub async fn run(broker: &Broker, s: Scenario) {
         );
     }
     if let Some(terminal) = s.channel_terminal {
-        let reason = if terminal.ends_with("skipped:") {
+        let reason = if let Some(reason) = s.rejection_reason {
+            reason
+        } else if terminal.ends_with("skipped:") {
             "NotSignal"
         } else {
             "AmbiguousInstruction"
@@ -633,6 +667,19 @@ pub async fn run(broker: &Broker, s: Scenario) {
         assert_eq!(parsed["buy_targets"], json!(["71", "72"]));
         assert_eq!(parsed["sell_targets"], json!(["88", "90", "92", "94"]));
         assert_eq!(parsed["position"], 0.005);
+    }
+    if let Some(expected) = &s.percentage {
+        let parsed: Value = serde_json::from_str(
+            journal
+                .iter()
+                .find(|line| line.starts_with("Signal parsed:"))
+                .unwrap()
+                .split_once("result=")
+                .unwrap()
+                .1,
+        )
+        .unwrap();
+        assert_eq!(parsed, expected.parsed, "percentage intent for {}", s.name);
     }
     let mut outputs = Vec::new();
     while let Some(message) = channel
@@ -708,6 +755,9 @@ pub async fn run(broker: &Broker, s: Scenario) {
     );
 }
 fn expected(s: &Scenario, index: usize) -> Value {
+    if let Some(percentage) = &s.percentage {
+        return expected_percentage(s, percentage, index);
+    }
     let fixture = match s.signal {
         Signal::Ada => include_str!("../fixtures/signals/ada-3x.expected.json"),
         Signal::Sol => include_str!("../fixtures/signals/sol-50x.expected.json"),
@@ -717,6 +767,7 @@ fn expected(s: &Scenario, index: usize) -> Value {
             7 => include_str!("../fixtures/signals/ada-fallback-7x.expected.json"),
             _ => panic!("missing expected fixture"),
         },
+        Signal::Xlm => unreachable!("percentage expectation required"),
     };
     let mut value: Value = serde_json::from_str(fixture).unwrap();
     value["client_data"]["name"] = json!("BingX-1");
@@ -734,5 +785,51 @@ fn expected(s: &Scenario, index: usize) -> Value {
         value["trade_object"]["positionConfiguration"]["accountingModel"] = json!("ONE_WAY_V1");
     }
     value["trade_object"]["auto_Trade"]["usingChannelConfig"] = json!(s.overrides[index].is_none());
+    value
+}
+
+fn expected_percentage(s: &Scenario, expected: &PercentageExpectation, index: usize) -> Value {
+    let mut value: Value =
+        serde_json::from_str(include_str!("../fixtures/signals/ada-3x.expected.json")).unwrap();
+    let user = 42 + index as i64;
+    let key = format!("auto-trade:{CHANNEL}:7:{user}:account-{user}:BingX:futures:XLMUSDT");
+    let id = |text: &str| format!("{:x}", Sha256::digest(text.as_bytes()))[..32].to_owned();
+    let long = expected.parsed["is_long"] == true;
+    let quantity: f64 = expected.entries[index]
+        .iter()
+        .map(|(_, _, quantity)| quantity)
+        .sum();
+    let notional: f64 = expected.entries[index]
+        .iter()
+        .map(|(price, _, quantity)| price.parse::<f64>().unwrap() * quantity)
+        .sum();
+    let price = 0.18892;
+    let margin = 5.0; // 0.5% of the scripted 1000 USDT balance.
+    let requested = margin * s.resolved[index] as f64;
+    let trade = &mut value["trade_object"];
+    trade["id"] = json!(id(&key));
+    trade["symbol"] = json!("XLM-USDT");
+    trade["chat_id"] = json!(user);
+    trade["is_long"] = json!(long);
+    trade["quantity"] = json!(quantity);
+    trade["used_coins"]["wished_quantity"] = json!(quantity);
+    trade["precisions"] = json!({"symbol":"XLM-USDT","priceRangeUp":5,"priceRangeDown":0.5,"tickSize":0.0001,"minQty":1.0/price,"maxQty":100000.0/price,"minNotional":1.0,"lotSize":0.1});
+    trade["buy_targets"] = json!(expected.entries[index].iter().enumerate().map(|(i,(price,fraction,quantity))| json!({"price":price,"symbol":"XLM-USDT","clientOrderId":id(&format!("{key}:BT:{i}")),"opened":true,"status":"new","role":"BT","side":if long {"BUY"}else{"SELL"},"type":"LIMIT","quantity":quantity,"fraction":fraction})).collect::<Vec<_>>());
+    if expected.entries[index].len() == 1 {
+        trade["buy_targets"][0]["fraction"] = json!(1);
+    }
+    trade["sell_targets"] = json!(expected.prices[index].iter().enumerate().map(|(i,price)| json!({"price":price,"symbol":"XLM-USDT","clientOrderId":id(&format!("{key}:ST:{i}")),"opened":true,"status":"new","role":"ST","side":if long {"SELL"}else{"BUY"},"type":"LIMIT","fraction":0.25})).collect::<Vec<_>>());
+    trade["positionSizing"] = json!({"mode":"dynamic","source":"signal","requestedQuoteAmount":margin,"effectiveQuoteAmount":margin,"balanceFallbackApplied":false,"fallbackUsageRatio":null,"marginQuoteAmount":margin,"notionalQuoteAmount":requested,"rawTradeQuantity":requested/price,"executableTradeQuantity":quantity,"executableNotionalQuoteAmount":notional,"display":"0.5% signal override","balanceFraction":0.005});
+    trade["auto_Trade"]["usingChannelConfig"] = json!(s.overrides[index].is_none());
+    trade["auto_Trade"]["exchangeClientName"] = json!("BingX-1");
+    trade["tradeLeverage"] = json!(format!("{}x", s.resolved[index]));
+    trade["idempotencyKey"] = json!(key);
+    trade["routing"]["symbol"] = json!("XLMUSDT");
+    trade["routing"]["partitionKey"] =
+        json!(format!("client-symbol:account-{user}:futures:XLMUSDT"));
+    trade.as_object_mut().unwrap().remove("stop_loss");
+    value["client_data"]["chatId"] = json!(user);
+    value["client_data"]["clientId"] = json!(format!("account-{user}"));
+    value["client_data"]["name"] = json!("BingX-1");
     value
 }

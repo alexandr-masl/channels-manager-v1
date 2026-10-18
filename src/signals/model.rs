@@ -9,7 +9,7 @@ pub struct TradingSignal {
     pub coin: String,
     pub is_long: bool,
     pub buy_targets: Vec<String>,
-    pub sell_targets: Vec<String>,
+    pub sell_targets: Vec<super::ProfitTarget>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_loss: Option<String>,
     #[serde(skip)]
@@ -36,6 +36,7 @@ pub enum SignalError {
     DuplicateField,
     InvalidNumber,
     InvalidPriceLevels,
+    MixedTargetFormats,
     UnsupportedFormat,
 }
 #[derive(Debug)]

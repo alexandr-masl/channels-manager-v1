@@ -205,3 +205,9 @@ optional. Invalid supplied fields and mixed management instructions reject.
 See [parser rules](docs/signal-parser-rules.md). Missing profit targets publish as
 `[]`; missing stop loss is omitted. Stop-free Advanced trades require the matching
 Trading Station missing-stop handling change.
+
+Profit targets support either prices or leveraged ROI percentages (`TG1 100%`),
+with one format per signal. Percentage prices use each client's resolved leverage
+and weighted entry price. SHORT percentages must be below `leverage × 100`;
+mixed formats reject before account calls. See the
+[percentage rules](docs/signal-parser-rules.md#percentage-profit-targets).

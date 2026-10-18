@@ -26,10 +26,15 @@ pub(super) fn validate(signal: &TradingSignal) -> Result<(), SignalError> {
         .iter()
         .map(|n| positive_decimal(n))
         .collect::<Result<Vec<_>, _>>()?;
+    super::targets::validate_targets(&signal.sell_targets, signal.is_long, None)?;
+    let percentage = signal
+        .sell_targets
+        .first()
+        .is_some_and(super::ProfitTarget::is_percentage);
     let targets = signal
         .sell_targets
         .iter()
-        .map(|n| positive_decimal(n))
+        .map(super::ProfitTarget::value)
         .collect::<Result<Vec<_>, _>>()?;
     let stop = signal
         .stop_loss
@@ -43,12 +48,12 @@ pub(super) fn validate(signal: &TradingSignal) -> Result<(), SignalError> {
     let high = entries.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let valid = if signal.is_long {
         stop.is_none_or(|p| p < low)
-            && targets.iter().all(|p| *p > high)
-            && targets.windows(2).all(|p| p[0] < p[1])
+            && (percentage
+                || (targets.iter().all(|p| *p > high) && targets.windows(2).all(|p| p[0] < p[1])))
     } else {
         stop.is_none_or(|p| p > high)
-            && targets.iter().all(|p| *p < low)
-            && targets.windows(2).all(|p| p[0] > p[1])
+            && (percentage
+                || (targets.iter().all(|p| *p < low) && targets.windows(2).all(|p| p[0] > p[1])))
     };
     if valid {
         Ok(())

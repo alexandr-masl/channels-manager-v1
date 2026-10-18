@@ -437,3 +437,42 @@ async fn invalid_bson_channel_leverage_does_not_override_valid_user_value() {
     assert_eq!(batch.jobs.len(), 1);
     assert_eq!(batch.jobs[0].signal_data["leverage"], "7x");
 }
+
+#[tokio::test]
+async fn percentage_targets_survive_preparation_and_use_each_clients_leverage() {
+    for explicit in [false, true] {
+        let (trades, market, mut context) = fixtures();
+        let ParseOutcome::Parsed(signal) = parse_signal(&format!(
+            "BTCUSDT SHORT\nENTRY 84550-84650\nTG1 400%{}",
+            if explicit { "\nLEVERAGE 8x" } else { "" }
+        )) else {
+            panic!("percentage signal")
+        };
+        context.signal = signal;
+        context
+            .channel_settings
+            .insert("futures", doc! {"active":true,"leverage":3});
+        context.clients[0].user_config = Some(
+            doc! {"user":42,"private_channels":[{"id":-100,"own_settings":true,"futures":{"active":true,"leverage":5}}]},
+        );
+        let PreparationOutcome::Prepared(batch) = SignalManager::new(&trades, &market)
+            .prepare(context, || NOW)
+            .await
+            .unwrap()
+        else {
+            panic!("valid percentage jobs")
+        };
+        assert_eq!(batch.jobs.len(), if explicit { 3 } else { 1 });
+        for job in batch.jobs {
+            assert_eq!(
+                job.signal_data["sell_targets"],
+                json!([{"type":"percent","value":400.0,"raw":"400%"}])
+            );
+            assert_eq!(
+                job.signal_data["leverage"],
+                if explicit { "8x" } else { "5x" }
+            );
+            assert!(channels_manager_v1::trading::job::validate_job(&job, NOW).is_ok());
+        }
+    }
+}

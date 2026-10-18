@@ -89,6 +89,23 @@ pub(super) fn build_jobs(
                 continue;
             }
         }
+        if super::targets::validate_job_targets(
+            &job.signal_data["sell_targets"],
+            context.signal.is_long,
+            job.signal_data["leverage"]
+                .as_str()
+                .and_then(|raw| raw.trim_end_matches(['x', 'X']).parse().ok())
+                .ok_or(PreparationError::InvalidContext)?,
+        )
+        .is_err()
+        {
+            println!(
+                "Signal client rejected: channel_id={} message_id={} reason=InvalidTargets",
+                context.message.channel_id(),
+                context.message.message_id()
+            );
+            continue;
+        }
         jobs.push(job);
     }
     Ok(jobs)

@@ -1,5 +1,5 @@
 use super::{
-    ParseOutcome, SignalError, TradingSignal,
+    ParseOutcome, ProfitTarget, SignalError, TradingSignal,
     validation::{positive_decimal, validate},
 };
 
@@ -158,8 +158,7 @@ fn parse(lines: &[(usize, Vec<&str>)]) -> Result<TradingSignal, SignalError> {
                         return Err(SignalError::UnsupportedFormat);
                     }
                     indexed_targets = Some(indexed);
-                    positive_decimal(line[1])?;
-                    targets.push(line[1].to_string());
+                    targets.push(ProfitTarget::parse(line[1])?);
                 }
                 _ => {
                     if management(line) {

@@ -372,3 +372,26 @@ async fn prepared_account_retains_context_for_builder_failures() {
     assert!(prepared.user_failure("invalidCalculatedAmount").is_none());
     assert_eq!(prepared.job.trade_expires_at, Some(1000));
 }
+
+#[tokio::test]
+async fn invalid_percentage_jobs_never_reach_account_admission() {
+    let deps = Dependencies {
+        calls: AtomicUsize::new(0),
+        failure: None,
+        stall: false,
+    };
+    for targets in [
+        json!([{"type":"percent","value":800,"raw":"800%"}]),
+        json!(["90",{"type":"percent","value":10,"raw":"10%"}]),
+    ] {
+        let mut value: serde_json::Value = serde_json::from_slice(&body()).unwrap();
+        value["signalData"]["is_long"] = json!(false);
+        value["signalData"]["leverage"] = json!(8);
+        value["signalData"]["sell_targets"] = targets;
+        let result = ClientTradeWorker::new(&deps, Duration::from_secs(1))
+            .prepare(&serde_json::to_vec(&value).unwrap(), || 1)
+            .await;
+        assert!(matches!(result, WorkerOutcome::Rejected(_)));
+    }
+    assert_eq!(deps.calls.load(Ordering::SeqCst), 0);
+}

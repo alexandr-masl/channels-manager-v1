@@ -237,3 +237,140 @@ fn business_build_failure_uses_the_prepared_reporting_context() {
     assert_eq!(notice.context.idempotency_key, account.job.idempotency_key);
     assert_eq!(notice.failure.reason(), reason);
 }
+
+fn percentage_account(
+    is_long: bool,
+    entry: &str,
+    quote: &str,
+    leverage: u32,
+    percentages: &[f64],
+) -> PreparedAccount {
+    let mut account = prepared(&fixtures()[0]);
+    let job = &mut account.job;
+    job.symbol = "XLMUSDT".into();
+    job.signal_data["symbol"] = json!("XLMUSDT");
+    job.signal_data["is_long"] = json!(is_long);
+    job.signal_data["buy_targets"] = json!([entry]);
+    job.signal_data["leverage"] = json!(format!("{leverage}x"));
+    job.signal_data["sell_targets"] = json!(
+        percentages
+            .iter()
+            .map(|value| json!({"type":"percent","value":value,"raw":format!("{value}%")}))
+            .collect::<Vec<_>>()
+    );
+    job.signal_data.as_object_mut().unwrap().remove("stop_loss");
+    job.market_data["bingXFutures"]["currPrice"] = json!(quote);
+    job.market_data["bingXFutures"]["symbolInfo"]["symbol"] = json!("XLM-USDT");
+    let identity = channels_manager_v1::contracts::messages::TradeIdentity {
+        channel_id: job.channel_id,
+        message_id: job.message_id,
+        chat_id: job.client["chatId"].as_i64().unwrap(),
+        client_id: job.client["clientId"].as_str().unwrap(),
+        symbol: &job.symbol,
+    };
+    job.idempotency_key = identity.idempotency_key();
+    job.partition_key = identity.partition_key();
+    job.channel_settings["default_sell_targets"] = json!(
+        percentages
+            .iter()
+            .map(|_| json!({"fraction":1.0 / percentages.len() as f64}))
+            .collect::<Vec<_>>()
+    );
+    account.settings = resolve_settings(job).unwrap();
+    account
+}
+fn profit_prices(account: &PreparedAccount) -> Vec<String> {
+    build_trade(account, 0.95, 1).unwrap().trade_object["sell_targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|target| target["price"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn percentage_xlm_short_and_long_use_resolved_leverage() {
+    for (is_long, expected) in [
+        (false, ["0.165305", "0.141690", "0.118075", "0.094460"]),
+        (true, ["0.212535", "0.236150", "0.259765", "0.283380"]),
+    ] {
+        let account =
+            percentage_account(is_long, "0.18892", "0.188920", 8, &[100., 200., 300., 400.]);
+        assert_eq!(profit_prices(&account), expected);
+        assert!(
+            build_trade(&account, 0.95, 1)
+                .unwrap()
+                .trade_object
+                .get("stop_loss")
+                .is_none()
+        );
+    }
+    let account = percentage_account(false, "0.18892", "0.188920", 4, &[100.]);
+    assert_eq!(profit_prices(&account), ["0.141690"]);
+}
+
+#[test]
+fn percentage_reference_uses_selected_entries_and_their_fractions() {
+    for (is_long, percentage, expected) in [(true, 80., "126.5000"), (false, 160., "92.0000")] {
+        let mut account = percentage_account(is_long, "100", "110.0000", 8, &[percentage]);
+        account.job.signal_data["buy_targets"] = json!(["100", "120"]);
+        account.job.channel_settings["default_buy_targets"] =
+            json!([{"fraction":"0.25"},{"fraction":"0.75"}]);
+        account.settings = resolve_settings(&account.job).unwrap();
+        assert_eq!(profit_prices(&account), [expected]);
+        account.job.channel_settings["default_buy_targets"] = json!([{"fraction":1}]);
+        account.settings = resolve_settings(&account.job).unwrap();
+        assert_eq!(
+            profit_prices(&account),
+            [if is_long { "132.0000" } else { "80.0000" }]
+        );
+    }
+}
+
+#[test]
+fn percentage_calculated_prices_do_not_use_integer_shorthand() {
+    for (percentage, price) in [(300., "1.000000"), (700., "2.000000")] {
+        let account = percentage_account(true, "0.25", "0.250000", 1, &[percentage]);
+        assert_eq!(profit_prices(&account), [price]);
+    }
+    let account = percentage_account(false, "100", "100.0000", 8, &[12.5]);
+    assert_eq!(profit_prices(&account), ["98.4375"]);
+}
+
+#[test]
+fn percentage_rounding_and_entry_geometry_cannot_create_invalid_exits() {
+    let account = percentage_account(true, "100", "100.00", 8, &[0.001]);
+    assert_eq!(
+        build_trade(&account, 0.95, 1).err(),
+        Some(TradeBuildError::Rejected("profitInsideEntryZone"))
+    );
+    let account = percentage_account(true, "100", "100.00", 8, &[10., 10.001]);
+    assert_eq!(
+        build_trade(&account, 0.95, 1).err(),
+        Some(TradeBuildError::Rejected("invalidProfitTargetOrder"))
+    );
+    let mut account = percentage_account(false, "100", "110.00", 8, &[1.]);
+    account.job.signal_data["buy_targets"] = json!(["100", "120"]);
+    account.job.channel_settings["default_buy_targets"] =
+        json!([{"fraction":0.5},{"fraction":0.5}]);
+    account.settings = resolve_settings(&account.job).unwrap();
+    assert_eq!(
+        build_trade(&account, 0.95, 1).err(),
+        Some(TradeBuildError::Rejected("profitInsideEntryZone"))
+    );
+}
+
+#[test]
+fn percentage_invalid_short_or_nonfinite_prices_never_build() {
+    for values in [vec![800.], vec![900.], vec![100., 800.]] {
+        let account = percentage_account(false, "100", "100.00", 8, &values);
+        assert_eq!(
+            build_trade(&account, 0.95, 1).err(),
+            Some(TradeBuildError::Rejected("invalidTradeJob"))
+        );
+    }
+    let account = percentage_account(false, "100", "100.00", 8, &[799.9999]);
+    assert!(build_trade(&account, 0.95, 1).is_err()); // Floors to zero at exchange precision.
+    let account = percentage_account(true, "1000", "1000.00", 1, &[f64::MAX]);
+    assert!(build_trade(&account, 0.95, 1).is_err());
+}

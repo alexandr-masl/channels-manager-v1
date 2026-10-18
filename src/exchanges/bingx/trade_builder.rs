@@ -142,6 +142,7 @@ pub fn build_trade(
         key: &job.idempotency_key,
         symbol: &validated.normalized_symbol,
         is_long: validated.is_long,
+        leverage: validated.requested_leverage,
     })?;
     // The original stop-loss helper sorts entry targets ascending before publication.
     entries.sort_by(|a, b| {

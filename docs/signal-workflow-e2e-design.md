@@ -64,6 +64,13 @@ This is an intentional behavior addition, not existing parser parity.
 
 ## Evidence per scenario
 
+Percentage coverage adds the issue #6 XLM SHORT signal, LONG, weighted entry
+ranges, per-user leverage and explicit-leverage precedence. Parsed logs must retain
+percentage objects; complete final envelopes must contain independently specified
+price targets. Both mixed-format orders and the SHORT percentage ceiling reject
+before account reads or mutations. Existing absolute-price, optional-exit and
+notification-history scenarios continue to run in the same matrix.
+
 - Seed all three Mongo roles: channel/client context, active user validation and
   managed trades. Use synthetic credentials and deterministic business IDs.
 - Confirm mandatory input publication; capture the actual final queue delivery.

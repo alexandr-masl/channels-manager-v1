@@ -385,7 +385,10 @@ fn supported_entry_target_and_stop_labels_are_interchangeable() {
                 );
                 let signal = expect_signal(&text);
                 assert_eq!(signal.buy_targets, ["100"]);
-                assert_eq!(signal.sell_targets, ["110", "120"]);
+                assert_eq!(
+                    serde_json::to_value(&signal.sell_targets).unwrap(),
+                    json!(["110", "120"])
+                );
                 assert_eq!(signal.stop_loss.as_deref(), Some("90"));
             }
         }
@@ -402,7 +405,10 @@ fn multiple_entries_and_single_target_work_for_both_sides() {
             "SOLUSDT {side}\nENTRY {entries}\nTP1 {target}\nLEVERAGE 4\nSL {stop}"
         ));
         assert_eq!(signal.buy_targets.len(), 2);
-        assert_eq!(signal.sell_targets, [target]);
+        assert_eq!(
+            serde_json::to_value(&signal.sell_targets).unwrap(),
+            json!([target])
+        );
         assert_eq!(signal.is_long, side == "LONG");
     }
 }
@@ -415,7 +421,10 @@ fn whitespace_emoji_case_and_line_endings_do_not_change_values() {
     assert_eq!(signal.symbol, "ETHUSDT");
     assert!(!signal.is_long);
     assert_eq!(signal.buy_targets, ["2500.50"]);
-    assert_eq!(signal.sell_targets, ["2400.25", "2300"]);
+    assert_eq!(
+        serde_json::to_value(&signal.sell_targets).unwrap(),
+        json!(["2400.25", "2300"])
+    );
     assert_eq!(signal.leverage.as_deref(), Some("5X"));
 }
 
@@ -423,7 +432,10 @@ fn whitespace_emoji_case_and_line_endings_do_not_change_values() {
 fn decimal_spelling_is_preserved_without_numeric_reserialization() {
     let signal = expect_signal("DOGEUSDT LONG\nENTRY .25 0.2500\nTP1 01.00\nLEVERAGE 3.0x\nSL .10");
     assert_eq!(signal.buy_targets, [".25", "0.2500"]);
-    assert_eq!(signal.sell_targets, ["01.00"]);
+    assert_eq!(
+        serde_json::to_value(&signal.sell_targets).unwrap(),
+        json!(["01.00"])
+    );
     assert_eq!(signal.stop_loss.as_deref(), Some(".10"));
     assert_eq!(signal.leverage.as_deref(), Some("3.0x"));
 }
@@ -627,4 +639,57 @@ fn separate_direction_headers_preserve_validation() {
     let parsed = expect_signal("BTCUSDT\nLONG |SWING\nENTRY 100");
     assert!(parsed.is_long);
     assert_eq!(parsed.symbol, "BTCUSDT");
+}
+
+#[test]
+fn percentage_targets_preserve_intent_and_ignore_commentary() {
+    let signal = expect_signal(
+        "⚜️#XLM/USDT |SCALP SHORT\n⚜️Entry 0.18892\n⚜️Tg1 100%\n⚜️Tg2 200%\n⚜️Tg3 300%\n⚜️Tg4 400%\n⚜️LEVERAGE 8x\n⚜️POSITION SIZE 0.5%\n🌴Once ParadiseTeam takes any additional actions, you will be informed.",
+    );
+    let value = serde_json::to_value(signal).unwrap();
+    assert_eq!(
+        value["sell_targets"],
+        json!([
+            {"type":"percent","value":100.0,"raw":"100%"},
+            {"type":"percent","value":200.0,"raw":"200%"},
+            {"type":"percent","value":300.0,"raw":"300%"},
+            {"type":"percent","value":400.0,"raw":"400%"}
+        ])
+    );
+    assert_eq!(value["position"], 0.005);
+    assert!(value.get("stop_loss").is_none());
+    for side in ["LONG", "SHORT"] {
+        let signal = expect_signal(&format!("BTCUSDT {side}\nENTRY 100\nTP1 12.50%\nTP2 25%"));
+        assert_eq!(
+            serde_json::to_value(signal).unwrap()["sell_targets"][0],
+            json!({"type":"percent","value":12.5,"raw":"12.50%"})
+        );
+    }
+}
+
+#[test]
+fn percentage_targets_reject_mixed_invalid_or_unordered_values() {
+    for targets in [
+        "TG1 10%\nTG2 120",
+        "TG1 120\nTG2 10%",
+        "TG1 0%",
+        "TG1 -2%",
+        "TG1 NaN%",
+        "TG1 inf%",
+        "TG1 1e2%",
+        "TG1 10%%",
+        "TG1 %",
+        "TG1 20%\nTG2 10%",
+        "TG1 20%\nTG2 20%",
+    ] {
+        for side in ["LONG", "SHORT"] {
+            assert!(
+                matches!(
+                    parse_signal(&format!("BTCUSDT {side}\nENTRY 100\n{targets}")),
+                    ParseOutcome::Rejected(_)
+                ),
+                "{targets}"
+            );
+        }
+    }
 }

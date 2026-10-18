@@ -256,3 +256,40 @@ fn error_snapshot_rejects_even_with_valid_metadata() {
         Some(JobValidationError::InvalidMarketData)
     );
 }
+
+#[test]
+fn percentage_job_targets_are_homogeneous_strict_and_leverage_bounded() {
+    for side in [true, false] {
+        let mut j = job();
+        j.signal_data["is_long"] = json!(side);
+        j.signal_data["leverage"] = json!(8);
+        j.signal_data["sell_targets"] = json!([
+            {"type":"percent","value":100,"raw":"100%"},
+            {"type":"percent","value":400,"raw":"400%"}
+        ]);
+        assert!(validate_job(&j, 1).is_ok());
+        for targets in [
+            json!(["110",{"type":"percent","value":10,"raw":"10%"}]),
+            json!([{"type":"price","value":10,"raw":"10%"}]),
+            json!([{"type":"percent","value":10,"raw":"20%"}]),
+            json!([{"type":"percent","value":"10","raw":"10%"}]),
+            json!([{"type":"percent","value":10}]),
+            json!([{"type":"percent","value":0,"raw":"0%"}]),
+            json!([{"type":"percent","value":-10,"raw":"-10%"}]),
+            json!([{"type":"percent","value":10,"raw":"10%","extra":true}]),
+            json!([{"type":"percent","value":20,"raw":"20%"},{"type":"percent","value":10,"raw":"10%"}]),
+        ] {
+            j.signal_data["sell_targets"] = targets.clone();
+            assert_eq!(
+                validate_job(&j, 1).err(),
+                Some(JobValidationError::InvalidSignal),
+                "{targets}"
+            );
+        }
+        for percentage in [799.9, 800.0, 900.0] {
+            j.signal_data["sell_targets"] =
+                json!([{"type":"percent","value":percentage,"raw":format!("{percentage}%")}]);
+            assert_eq!(validate_job(&j, 1).is_ok(), side || percentage < 800.0);
+        }
+    }
+}
