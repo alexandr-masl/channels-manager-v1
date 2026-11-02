@@ -52,7 +52,21 @@ For first TypeScript → Rust replacement, also follow [cutover](docs/verificati
 Verified on 2026-10-18: context `do-fra1-mar-bot`, namespace `default`, existing
 Rust Deployment `satoshi-channel-updates-manager`. Requires Docker, kubectl and jq.
 
-### 0. Open a clean Bash shell
+### 0. Start Docker Desktop, then open Bash
+
+Open Docker Desktop:
+
+```sh
+open -a Docker
+```
+
+Wait until its engine is running, then check:
+
+```sh
+docker info >/dev/null && echo "Docker engine ready"
+```
+
+Continue only after that prints `Docker engine ready`.
 
 Run this command **alone** in a fresh terminal:
 
@@ -63,6 +77,8 @@ bash --noprofile --norc
 Wait for the Bash prompt (usually `bash-3.2$`). Then paste steps 1–5, in order,
 in **this same terminal**. A second terminal does not inherit these variables.
 Do not run `set -u` in your Zsh prompt; prompt plugins can fail on unset variables.
+If any step fails and the prompt returns to Zsh, stop pasting commands. Fix the
+failure, open Bash again and restart at step 1; its variables were lost.
 
 ### 1. Set release variables
 
@@ -85,6 +101,7 @@ IMAGE_TAG="$(date -u +%Y%m%d-%H%M%S)"
 
 [[ -f "$APP_AUTHORIZATION_FILE" && -r "$APP_AUTHORIZATION_FILE" ]]
 for binary in docker kubectl jq; do command -v "$binary" >/dev/null; done
+docker info >/dev/null
 kubectl --context "$KUBE_CONTEXT" -n "$KUBE_NAMESPACE" get deployment "$DEPLOYMENT" -o name
 echo "Deploying to: $KUBE_CONTEXT / $KUBE_NAMESPACE"
 
@@ -99,6 +116,7 @@ fi
 : "${IMAGE_REPOSITORY:?Run step 1 in this same Bash terminal}"
 : "${IMAGE_TAG:?Run step 1 in this same Bash terminal}"
 : "${RELEASE_DIR:?Run step 1 in this same Bash terminal}"
+docker info >/dev/null
 docker login
 
 docker buildx build --platform linux/amd64 \
