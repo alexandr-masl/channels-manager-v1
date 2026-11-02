@@ -90,15 +90,17 @@ pub fn validate_job(
     let leverage = positive_number(&leverage)
         .filter(|n| n.fract() == 0.0 && *n <= u32::MAX as f64)
         .ok_or(JobValidationError::InvalidSignal)?;
-    for field in ["buy_targets", "sell_targets"] {
-        if !signal[field]
-            .as_array()
-            .is_some_and(|ts| !ts.is_empty() && ts.iter().all(|t| positive_number(t).is_some()))
-        {
-            return Err(JobValidationError::InvalidSignal);
-        }
+    if !signal["buy_targets"]
+        .as_array()
+        .is_some_and(|ts| !ts.is_empty() && ts.iter().all(|t| positive_number(t).is_some()))
+    {
+        return Err(JobValidationError::InvalidSignal);
     }
-    positive_number(&signal["stop_loss"]).ok_or(JobValidationError::InvalidSignal)?;
+    crate::signals::targets::validate_job_targets(&signal["sell_targets"], is_long, leverage)
+        .map_err(|_| JobValidationError::InvalidSignal)?;
+    if let Some(stop) = signal.get("stop_loss") {
+        positive_number(stop).ok_or(JobValidationError::InvalidSignal)?;
+    }
     if signal
         .get("position")
         .is_some_and(|v| positive_number(v).is_none())

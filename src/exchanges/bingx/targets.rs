@@ -81,6 +81,11 @@ impl Precision {
                 .parse()
                 .map_err(|_| TradeBuildError::Rejected("invalidPrice"))?;
         }
+        self.format_price(price)
+    }
+    // Calculated prices are actual prices, never the legacy integer shorthand.
+    fn format_price(&self, price: f64) -> Result<String> {
+        finite(price)?;
         let factor = 10_f64.powi(self.price_digits as i32);
         let truncated = (price * factor).floor() / factor;
         finite(truncated)?;
@@ -191,8 +196,34 @@ pub(super) struct ExitContext<'a> {
     pub key: &'a str,
     pub symbol: &'a str,
     pub is_long: bool,
+    pub leverage: u32,
 }
-pub(super) fn exits(c: ExitContext<'_>) -> Result<(Vec<Value>, Value)> {
+
+fn profit_entry_reference(entries: &[Value], current: f64) -> Result<f64> {
+    let prices: Vec<_> = entries
+        .iter()
+        .filter_map(|entry| {
+            positive_number(&entry["price"])
+                .map(|price| (price, positive_number(&entry["fraction"])))
+        })
+        .collect();
+    if prices.is_empty() {
+        return finite(current);
+    }
+    let (weighted, fractions) = prices
+        .iter()
+        .filter_map(|(price, fraction)| fraction.map(|fraction| (price * fraction, fraction)))
+        .fold((0.0, 0.0), |(sum, weights), (price, fraction)| {
+            (sum + price, weights + fraction)
+        });
+    finite(if fractions > 0.0 {
+        weighted / fractions
+    } else {
+        prices.iter().map(|(price, _)| price).sum::<f64>() / prices.len() as f64
+    })
+}
+
+pub(super) fn exits(c: ExitContext<'_>) -> Result<(Vec<Value>, Option<Value>)> {
     let ExitContext {
         signal,
         config,
@@ -204,88 +235,163 @@ pub(super) fn exits(c: ExitContext<'_>) -> Result<(Vec<Value>, Value)> {
         key,
         symbol,
         is_long,
+        leverage,
     } = c;
     let prices = signal["sell_targets"]
         .as_array()
         .ok_or(TradeBuildError::Rejected("invalidProfitTargets"))?;
-    let buys = signal["buy_targets"]
-        .as_array()
-        .ok_or(TradeBuildError::Rejected("invalidEntryTargets"))?
-        .len();
-    let configured = config["default_sell_targets"]
-        .as_array()
-        .ok_or(TradeBuildError::Rejected("invalidProfitFractions"))?;
-    let enough = |sells| {
-        let (q, n) = precision.minimum(sells, buys, pro);
-        quantity >= q && notional >= n
-    };
-    let reduced = if enough(prices.len()) {
-        None
-    } else {
-        // Recheck entry-only minimums when no reduced target count fits, just
-        // like TypeScript. Its single-signal-target branch still creates one TP.
-        let count = (1..prices.len()).rev().find(|n| enough(*n)).unwrap_or(0);
-        if !enough(count) {
-            return Err(TradeBuildError::Rejected("insufficientTargetBalance"));
-        }
-        Some(count)
-    };
-    let count = if prices.len() == 1 {
-        1
-    } else {
-        reduced.unwrap_or(configured.len()).min(prices.len())
-    };
-    if count == 0 {
-        return Err(TradeBuildError::Rejected("missingProfitTargets"));
-    }
-    let equal = reduced.is_some() || configured.len() > prices.len();
-    let high = entries
+    let entry_prices = entries
         .iter()
         .map(|e| positive(&e["price"]))
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+    let high = entry_prices
+        .iter()
+        .copied()
         .max_by(f64::total_cmp)
         .ok_or(TradeBuildError::Rejected("missingEntryTargets"))?;
+    let low = entry_prices.iter().copied().min_by(f64::total_cmp).unwrap();
+    let reference = if prices.first().is_some_and(|raw| raw["type"] == "percent") {
+        Some(profit_entry_reference(entries, precision.current)?)
+    } else {
+        None
+    };
     let mut profits = Vec::new();
-    for (i, raw) in prices.iter().take(count).enumerate() {
-        let fraction = if count == 1 {
-            1.0
-        } else if equal {
-            let base = 100 / count;
-            if i == count - 1 {
-                (100 - base * (count - 1)) as f64 / 100.0
-            } else {
-                base as f64 / 100.0
+    if !prices.is_empty() {
+        let buys = signal["buy_targets"]
+            .as_array()
+            .ok_or(TradeBuildError::Rejected("invalidEntryTargets"))?
+            .len();
+        let configured = config["default_sell_targets"]
+            .as_array()
+            .ok_or(TradeBuildError::Rejected("invalidProfitFractions"))?;
+        let enough = |sells| {
+            let (q, n) = precision.minimum(sells, buys, pro);
+            quantity >= q && notional >= n
+        };
+        let reduced = if enough(prices.len()) {
+            None
+        } else {
+            // Recheck entry-only minimums when no reduced target count fits, just
+            // like TypeScript. Its single-signal-target branch still creates one TP.
+            let count = (1..prices.len()).rev().find(|n| enough(*n)).unwrap_or(0);
+            if !enough(count) {
+                return Err(TradeBuildError::Rejected("insufficientTargetBalance"));
             }
-        } else {
-            positive(&configured[i]["fraction"])?
+            Some(count)
         };
-        let price = precision.price(raw)?;
-        let n: f64 = price.parse().unwrap();
-        precision.validate(precision.current, quantity * fraction)?;
-        if (is_long && n <= high) || (!is_long && n >= high) {
-            return Err(TradeBuildError::Rejected("profitInsideEntryZone"));
+        let count = if prices.len() == 1 {
+            1
+        } else {
+            reduced.unwrap_or(configured.len()).min(prices.len())
+        };
+        if count == 0 {
+            return Err(TradeBuildError::Rejected("missingProfitTargets"));
         }
-        let mut t = target(key, i, "ST", symbol, price, is_long);
-        t["fraction"] = if count == 1 || equal {
-            json!(fraction)
-        } else {
-            configured[i]["fraction"].clone()
-        };
-        profits.push(t);
+        let equal = reduced.is_some() || configured.len() > prices.len();
+        for (i, raw) in prices.iter().take(count).enumerate() {
+            let fraction = if count == 1 {
+                1.0
+            } else if equal {
+                let base = 100 / count;
+                if i == count - 1 {
+                    (100 - base * (count - 1)) as f64 / 100.0
+                } else {
+                    base as f64 / 100.0
+                }
+            } else {
+                positive(&configured[i]["fraction"])?
+            };
+            let price = if let Some(reference) = reference {
+                let movement = positive(&raw["value"])? / (leverage as f64 * 100.0);
+                let resolved = finite(
+                    reference
+                        * if is_long {
+                            1.0 + movement
+                        } else {
+                            1.0 - movement
+                        },
+                )?;
+                // Match the original Futures helper at decimal truncation boundaries.
+                let tolerance = f64::EPSILON * reference.abs().max(1.0) * 4.0;
+                precision.format_price(resolved + tolerance)?
+            } else {
+                precision.price(raw)?
+            };
+            let n: f64 = price.parse().unwrap();
+            precision.validate(precision.current, quantity * fraction)?;
+            if (is_long && n <= high) || (!is_long && n >= low) {
+                return Err(TradeBuildError::Rejected("profitInsideEntryZone"));
+            }
+            if profits.last().is_some_and(|previous: &Value| {
+                let previous = positive_number(&previous["price"]).unwrap();
+                if is_long {
+                    n <= previous
+                } else {
+                    n >= previous
+                }
+            }) {
+                return Err(TradeBuildError::Rejected("invalidProfitTargetOrder"));
+            }
+            let mut t = target(key, i, "ST", symbol, price, is_long);
+            t["fraction"] = if count == 1 || equal {
+                json!(fraction)
+            } else {
+                configured[i]["fraction"].clone()
+            };
+            profits.push(t);
+        }
     }
-    let stop_price = precision.price(&signal["stop_loss"])?;
+    let Some(raw_stop) = signal.get("stop_loss") else {
+        return Ok((profits, None));
+    };
+    let stop_price = precision.price(raw_stop)?;
     let stop: f64 = stop_price.parse().unwrap();
-    let low = entries
-        .iter()
-        .map(|e| positive(&e["price"]))
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .min_by(f64::total_cmp)
-        .unwrap();
     if (is_long && stop > low) || (!is_long && stop < high) {
         return Err(TradeBuildError::Rejected("stopInsideEntryZone"));
     }
     precision.validate(precision.current, quantity)?;
-    Ok((profits, target(key, 0, "SL", symbol, stop_price, is_long)))
+    Ok((
+        profits,
+        Some(target(key, 0, "SL", symbol, stop_price, is_long)),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn profit_reference_matches_original_fallbacks() {
+        assert_eq!(
+            profit_entry_reference(
+                &[
+                    json!({"price":"100","fraction":0.25}),
+                    json!({"price":"120","fraction":0.75})
+                ],
+                90.
+            )
+            .unwrap(),
+            115.
+        );
+        assert_eq!(
+            profit_entry_reference(&[json!({"price":"100"}), json!({"price":"120"})], 90.).unwrap(),
+            110.
+        );
+        assert_eq!(
+            profit_entry_reference(&[json!({"price":"bad","fraction":1})], 90.).unwrap(),
+            90.
+        );
+        assert_eq!(profit_entry_reference(&[], 90.).unwrap(), 90.);
+        assert_eq!(
+            profit_entry_reference(
+                &[
+                    json!({"price":"100","fraction":0.5}),
+                    json!({"price":"120","fraction":0})
+                ],
+                90.
+            )
+            .unwrap(),
+            100.
+        );
+    }
 }

@@ -142,6 +142,18 @@ For containers, inject `SATOSHI_TG_TOKEN` through the runtime environment (a
 Kubernetes Secret in the cluster); never include it in the image or manifest.
 
 
+### User failure history
+
+Actionable admission and trade-construction failures are saved directly to Bot
+MongoDB `user_configs.lastNotifications` before the rejected job is acknowledged.
+The bot displays them on the next main-menu render. Internal failures remain in logs.
+History retains seven entries and suppresses duplicate IDs within that window.
+
+History writes have at most two retries within `RUNTIME_OPERATION_TIMEOUT_MS`;
+reporting failures log `user_failure_notification_save_failed` and settle the job.
+A prolonged MongoDB outage can lose the notice. See the
+[allowlist, reporting rules and tests](docs/user-failure-notifications.md).
+
 ### Client-job worker (slices 3–4)
 
 For an isolated workflow test, set:
@@ -186,3 +198,16 @@ signal leverage, then an active user channel override, then active channel
 For example: `"futures": {"active": true, "leverage": 3}`. Missing or invalid
 selected leverage rejects that client; it does not default to 1x. The worker
 always receives resolved leverage.
+
+Telegram signals require a structured USDT symbol/direction header and an entry.
+Banners and commentary are ignored; targets and stop loss are independently
+optional. Invalid supplied fields and mixed management instructions reject.
+See [parser rules](docs/signal-parser-rules.md). Missing profit targets publish as
+`[]`; missing stop loss is omitted. Stop-free Advanced trades require the matching
+Trading Station missing-stop handling change.
+
+Profit targets support either prices or leveraged ROI percentages (`TG1 100%`),
+with one format per signal. Percentage prices use each client's resolved leverage
+and weighted entry price. SHORT percentages must be below `leverage × 100`;
+mixed formats reject before account calls. See the
+[percentage rules](docs/signal-parser-rules.md#percentage-profit-targets).

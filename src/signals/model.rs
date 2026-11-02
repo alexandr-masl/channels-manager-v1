@@ -9,8 +9,11 @@ pub struct TradingSignal {
     pub coin: String,
     pub is_long: bool,
     pub buy_targets: Vec<String>,
-    pub sell_targets: Vec<String>,
-    pub stop_loss: String,
+    pub sell_targets: Vec<super::ProfitTarget>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_loss: Option<String>,
+    #[serde(skip)]
+    pub ignored_lines: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub leverage: Option<String>,
     /// Optional signal override as a balance fraction (0.5% → 0.005).
@@ -23,10 +26,17 @@ pub struct TradingSignal {
 #[derive(Debug, PartialEq, Eq)]
 pub enum SignalError {
     MissingField,
+    AmbiguousInstruction,
+    AtLine {
+        line: usize,
+        field: String,
+        reason: Box<SignalError>,
+    },
     AmbiguousHeader,
     DuplicateField,
     InvalidNumber,
     InvalidPriceLevels,
+    MixedTargetFormats,
     UnsupportedFormat,
 }
 #[derive(Debug)]

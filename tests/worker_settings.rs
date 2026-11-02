@@ -24,6 +24,54 @@ fn validates_identity_and_preserves_wire() {
     assert_eq!(v.job.signal_data, j.signal_data);
 }
 #[test]
+fn optional_exits_accept_only_absent_stop_and_empty_targets() {
+    for targets in [true, false] {
+        for stop in [true, false] {
+            let mut j = job();
+            if !targets {
+                j.signal_data["sell_targets"] = json!([]);
+            }
+            if !stop {
+                j.signal_data.as_object_mut().unwrap().remove("stop_loss");
+            }
+            assert!(validate_job(&j, 1).is_ok(), "targets={targets} stop={stop}");
+        }
+    }
+    for field in ["sell_targets", "stop_loss"] {
+        for value in [Value::Null, json!(false), json!("bad"), json!(0)] {
+            let mut j = job();
+            j.signal_data[field] = value;
+            assert_eq!(
+                validate_job(&j, 1).err(),
+                Some(JobValidationError::InvalidSignal)
+            );
+        }
+    }
+}
+#[test]
+fn missing_or_empty_profit_config_is_allowed_only_without_profit_targets() {
+    for value in [None, Some(json!([]))] {
+        let mut j = job();
+        if let Some(value) = value {
+            j.channel_settings["default_sell_targets"] = value;
+        } else {
+            j.channel_settings
+                .as_object_mut()
+                .unwrap()
+                .remove("default_sell_targets");
+        }
+        assert!(resolve_settings(&j).is_err());
+        j.signal_data["sell_targets"] = json!([]);
+        assert!(resolve_settings(&j).is_ok());
+    }
+    for value in [Value::Null, json!("bad"), json!([{"fraction":0}])] {
+        let mut j = job();
+        j.signal_data["sell_targets"] = json!([]);
+        j.channel_settings["default_sell_targets"] = value;
+        assert!(resolve_settings(&j).is_err());
+    }
+}
+#[test]
 fn expiry_is_required_and_never_rebuilt() {
     let mut j = job();
     for expiry in [None, Some(0), Some(100)] {
@@ -207,4 +255,41 @@ fn error_snapshot_rejects_even_with_valid_metadata() {
         validate_job(&j, 1).err(),
         Some(JobValidationError::InvalidMarketData)
     );
+}
+
+#[test]
+fn percentage_job_targets_are_homogeneous_strict_and_leverage_bounded() {
+    for side in [true, false] {
+        let mut j = job();
+        j.signal_data["is_long"] = json!(side);
+        j.signal_data["leverage"] = json!(8);
+        j.signal_data["sell_targets"] = json!([
+            {"type":"percent","value":100,"raw":"100%"},
+            {"type":"percent","value":400,"raw":"400%"}
+        ]);
+        assert!(validate_job(&j, 1).is_ok());
+        for targets in [
+            json!(["110",{"type":"percent","value":10,"raw":"10%"}]),
+            json!([{"type":"price","value":10,"raw":"10%"}]),
+            json!([{"type":"percent","value":10,"raw":"20%"}]),
+            json!([{"type":"percent","value":"10","raw":"10%"}]),
+            json!([{"type":"percent","value":10}]),
+            json!([{"type":"percent","value":0,"raw":"0%"}]),
+            json!([{"type":"percent","value":-10,"raw":"-10%"}]),
+            json!([{"type":"percent","value":10,"raw":"10%","extra":true}]),
+            json!([{"type":"percent","value":20,"raw":"20%"},{"type":"percent","value":10,"raw":"10%"}]),
+        ] {
+            j.signal_data["sell_targets"] = targets.clone();
+            assert_eq!(
+                validate_job(&j, 1).err(),
+                Some(JobValidationError::InvalidSignal),
+                "{targets}"
+            );
+        }
+        for percentage in [799.9, 800.0, 900.0] {
+            j.signal_data["sell_targets"] =
+                json!([{"type":"percent","value":percentage,"raw":format!("{percentage}%")}]);
+            assert_eq!(validate_job(&j, 1).is_ok(), side || percentage < 800.0);
+        }
+    }
 }

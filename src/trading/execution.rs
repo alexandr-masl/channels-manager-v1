@@ -1,5 +1,8 @@
 //! Admission coordinator with automatic eligible Hedge migration.
-use super::job::{JobValidationError, ValidatedJob, validate_job};
+use super::{
+    job::{JobValidationError, ValidatedJob, validate_job},
+    notifications::{FailureNotification, NotificationContext},
+};
 use crate::{
     contracts::messages::ClientTradeJob,
     exchanges::bingx::{
@@ -29,12 +32,30 @@ pub struct PreparedAccount {
     pub job: ClientTradeJob,
     pub settings: ResolvedSettings,
     pub admission: AdmittedAccount,
+    pub notification_context: NotificationContext,
 }
 pub enum WorkerOutcome {
     Admitted(Box<PreparedAccount>),
     Rejected(WorkerRejection),
+    RejectedForUser {
+        reason: WorkerRejection,
+        notification: FailureNotification,
+    },
     Expired,
     Retryable(&'static str),
+}
+impl PreparedAccount {
+    pub fn user_failure(&self, reason: &str) -> Option<FailureNotification> {
+        self.notification_context.user_failure(reason)
+    }
+}
+impl WorkerOutcome {
+    pub fn notification(&self) -> Option<&FailureNotification> {
+        match self {
+            Self::RejectedForUser { notification, .. } => Some(notification),
+            _ => None,
+        }
+    }
 }
 pub trait AdmissionDependencies: Send + Sync {
     fn check<'a>(
@@ -123,6 +144,7 @@ impl<'a, D: AdmissionDependencies + ?Sized> ClientTradeWorker<'a, D> {
             Ok(s) => s,
             Err(e) => return WorkerOutcome::Rejected(WorkerRejection::Settings(e)),
         };
+        let notification_context = NotificationContext::from_validated(&validated);
         let budget = self
             .timeout
             .min(Duration::from_millis(validated.expires_at - now));
@@ -137,10 +159,17 @@ impl<'a, D: AdmissionDependencies + ?Sized> ClientTradeWorker<'a, D> {
                 job,
                 settings,
                 admission,
+                notification_context,
             })),
             Ok(Err(AdmissionFailure::Retryable(code))) => WorkerOutcome::Retryable(code),
             Ok(Err(AdmissionFailure::Rejected(code))) => {
-                WorkerOutcome::Rejected(WorkerRejection::Admission(code))
+                match notification_context.user_failure(code) {
+                    Some(notification) => WorkerOutcome::RejectedForUser {
+                        reason: WorkerRejection::Admission(code),
+                        notification,
+                    },
+                    None => WorkerOutcome::Rejected(WorkerRejection::Admission(code)),
+                }
             }
             Err(_) if attempt.leverage_started() => {
                 WorkerOutcome::Rejected(WorkerRejection::Admission("leverageChangeTimeout"))

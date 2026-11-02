@@ -1,6 +1,6 @@
 # Signal extraction and optional exits
 
-Status: agreed design; implementation pending.
+Status: implemented.
 
 ## Purpose
 
@@ -38,7 +38,7 @@ management messages do not create signals. Mixing one into a signal rejects as
 | Symbol | Required USDT pair: BTC/USDT or BTCUSDT; exchange support checked later |
 | Direction | Required LONG or SHORT |
 | Entry | Required positive decimal price(s), including a range |
-| Targets | Optional TG/TP list; numbered labels start at 1 and stay consecutive; do not mix numbered/unnumbered forms |
+| Targets | Optional TG/TP list of prices or ROI percentages; one format per signal; numbered labels start at 1 and stay consecutive |
 | Stop loss | Optional positive price via existing SL/STOP syntax |
 | Leverage | Optional in text; explicit valid value wins, otherwise resolve active user/channel configuration per client |
 | Position size | Optional percentage; 1% becomes 0.01 of balance |
@@ -46,10 +46,49 @@ management messages do not create signals. Mixing one into a signal rejects as
 | DAY/SWING/SCALP | Descriptive text, ignored |
 
 Keep original decimal spelling. Supplied prices must be finite and positive.
-When present, LONG stops must be below entries and targets above entries in
-increasing order; SHORT uses the reverse relationships. Missing exits skip these
+Numbered and unnumbered TG/TP labels cannot be mixed.
+When present, LONG stops must be below entries and price targets above entries in
+increasing order; SHORT uses the reverse price relationships. Missing exits skip these
 checks. Invalid supplied exits do not become absent exits. Resolved worker
 leverage must be a positive integer within exchange limits.
+
+## Percentage profit targets
+
+`TG1 100%` expresses leveraged ROI. All profit targets in one signal must be
+prices or percentages; mixed formats reject as `MixedTargetFormats`. Percentages
+must be finite, positive and increasing for both LONG and SHORT. Decimal
+percentages such as `12.5%` are supported. Entry and stop-loss fields remain prices.
+
+Parsing and client jobs preserve percentage intent:
+
+```json
+{"type":"percent","value":100,"raw":"100%"}
+```
+
+Each client resolves leverage from the explicit signal, eligible active user
+settings, then active channel settings. Every supplied SHORT percentage must be
+below `leverage × 100`; validation happens before account admission or mutations,
+even if allocation would later omit that target. An invalid client is skipped
+without preventing other valid clients from proceeding.
+
+After constructing entries, use their fraction-weighted price as the reference.
+The original helper falls back to their mean without usable fractions, then the
+current price without valid entries; the builder still requires valid entries.
+
+```text
+movement = percentage / (leverage × 100)
+LONG price  = reference × (1 + movement)
+SHORT price = reference × (1 − movement)
+```
+
+Apply existing price precision and allocation. Reject nonpositive/nonfinite prices,
+prices inside the entry range and targets that collapse or lose order after
+rounding. Calculated prices bypass legacy integer-price shorthand.
+
+Example: XLM SHORT at `0.18892`, leverage `8x`, targets `100/200/300/400%`
+resolve to `0.165305/0.141690/0.118075/0.094460` before exchange rounding.
+Parsed logs retain percentage objects; published Trading Station targets contain
+ordinary price strings. No additional exchange requests or configuration are needed.
 
 ## Optional exits through publication
 
@@ -62,12 +101,12 @@ leverage must be a positive integer within exchange limits.
   Preserve the existing object shapes when either is supplied.
 - Do not invent target/stop prices or manufacture a zero-price order.
 
-Trading Station's `src/trades/target_validation.rs` currently accepts empty target
-arrays and absent/null stop loss. Verify the published shapes through its creation
-contract and relevant strategy paths; target-dependent strategy assumptions must
-handle empty exits. Its validation acceptance alone does not prove all lifecycle
-paths support them. Any needed downstream changes must be coordinated before
-rollout. Channel settings do not manufacture exits unless separately specified.
+Trading Station accepts empty target arrays and absent stops at creation. The
+coordinated change in `../trading-station-rust/src/trades/strategies/advanced.rs`
+keeps Advanced configured: after a profit fill, absent stop loss requests further
+profit processing without a stop move or notification. An invalid supplied stop
+still errors. Deploy that Trading Station change alongside support for stop-free
+Advanced signals. Creation tests cover all four exit combinations.
 
 ## Reported signal
 
@@ -99,6 +138,9 @@ is commentary and does not enable a dry-run mode.
 - IDs and numbers in ignored text never become trade values; BREAKOUT inside
   commentary does not change entry type.
 - Existing format, numeric, user settings, admission and publication tests pass.
+- XLM percentage SHORT/LONG, weighted entry ranges and per-user leverage reach
+  final RabbitMQ publication. Mixed formats and impossible SHORT percentages
+  publish no trade and make no account calls.
 
 Successful parsing logs extracted data and ignored-line count. Rejections report
 reason, field and source line where available. Logs never include account secrets.
