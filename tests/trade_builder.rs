@@ -63,6 +63,14 @@ fn compare(actual: &Value, expected: &Value, path: &str) {
 #[test]
 fn matches_original_typescript_fixtures() {
     for case in fixtures() {
+        if let Some(reason) = case["expected_error"].as_str() {
+            let Err(TradeBuildError::Rejected(actual)) = build_trade(&prepared(&case), 0.95, 1)
+            else {
+                panic!("expected documented policy rejection")
+            };
+            assert_eq!(actual, reason);
+            continue;
+        }
         let result = build_trade(&prepared(&case), 0.95, 1).unwrap();
         let mut actual = serde_json::to_value(result).unwrap();
         let trade = &mut actual["trade_object"];
@@ -373,4 +381,177 @@ fn percentage_invalid_short_or_nonfinite_prices_never_build() {
     assert!(build_trade(&account, 0.95, 1).is_err()); // Floors to zero at exchange precision.
     let account = percentage_account(true, "1000", "1000.00", 1, &[f64::MAX]);
     assert!(build_trade(&account, 0.95, 1).is_err());
+}
+
+fn allocation_account(quantity: f64, is_long: bool) -> PreparedAccount {
+    let mut account = prepared(&fixtures()[0]);
+    let job = &mut account.job;
+    job.symbol = "ETHUSDT".into();
+    job.signal_data = json!({"symbol":"ETHUSDT","exchange_client":"_futures","is_long":is_long,"leverage":"1x","buy_targets":["1000"],"sell_targets":if is_long {json!(["1100","1200","1300","1400"])} else {json!(["900","800","700","600"])},"position":1});
+    job.market_data = json!({"bingXFutures":{"currPrice":"1000.00","symbolInfo":{"symbol":"ETH-USDT","status":1,"tickSize":0.01,"lotSize":0.01,"minQty":0.01,"minNotional":10}}});
+    job.channel_settings = json!({"default_quantity":1,"default_buy_targets":[{"fraction":1}],"default_sell_targets":[{"fraction":0.4},{"fraction":0.3},{"fraction":0.2},{"fraction":0.1}],"strategy":"basic","xPro":null});
+    let identity = channels_manager_v1::contracts::messages::TradeIdentity {
+        channel_id: job.channel_id,
+        message_id: job.message_id,
+        chat_id: job.client["chatId"].as_i64().unwrap(),
+        client_id: job.client["clientId"].as_str().unwrap(),
+        symbol: &job.symbol,
+    };
+    job.idempotency_key = identity.idempotency_key();
+    job.partition_key = identity.partition_key();
+    account.settings = resolve_settings(job).unwrap();
+    account.admission.available_balance = quantity * 1000.;
+    account.admission.available_balance_raw = json!(quantity * 1000.);
+    account.notification_context =
+        channels_manager_v1::trading::notifications::NotificationContext::from_validated(
+            &channels_manager_v1::trading::job::validate_job(job, 1).unwrap(),
+        );
+    account
+}
+
+#[test]
+fn reduction_checks_actual_lots_instead_of_target_count() {
+    for (quantity, fractions) in [
+        (0.01, json!([1.])),
+        (0.02, json!([0.5, 0.5])),
+        (0.03, json!([0.5, 0.5])),
+        (0.04, json!([0.33, 0.33, 0.34])),
+        (0.06, json!([0.33, 0.33, 0.34])),
+        (0.09, json!([0.33, 0.33, 0.34])),
+        (0.10, json!([0.4, 0.3, 0.2, 0.1])),
+    ] {
+        let account = allocation_account(quantity, true);
+        let trade = build_trade(&account, 0.95, 1).unwrap().trade_object;
+        let actual: Vec<_> = trade["sell_targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|target| target["fraction"].clone())
+            .collect();
+        for (a, b) in actual.iter().zip(fractions.as_array().unwrap()) {
+            assert_eq!(a.as_f64(), b.as_f64());
+        }
+        assert_eq!(
+            actual.len(),
+            fractions.as_array().unwrap().len(),
+            "quantity={quantity}"
+        );
+        assert_eq!(trade["quantity"], json!(quantity));
+    }
+}
+
+#[test]
+fn reduction_uses_exact_serialized_entry_sum_without_changing_position_wire() {
+    let mut account = allocation_account(0.07, true);
+    account.job.signal_data["buy_targets"] = json!(["1000", "1000"]);
+    account.job.channel_settings["default_buy_targets"] =
+        json!([{"fraction":1./7.},{"fraction":6./7.}]);
+    account.job.channel_settings["default_sell_targets"] = json!([{"fraction":"1"}]);
+    account.job.market_data["bingXFutures"]["symbolInfo"]["minQty"] = json!(0.01);
+    account.settings = resolve_settings(&account.job).unwrap();
+    let trade = build_trade(&account, 0.95, 1).unwrap().trade_object;
+    assert_eq!(trade["buy_targets"][0]["quantity"], 0.01);
+    assert_eq!(trade["buy_targets"][1]["quantity"], 0.06);
+    assert_eq!(trade["quantity"], json!(0.01_f64 + 0.06_f64));
+    assert_eq!(
+        trade["positionSizing"]["executableTradeQuantity"],
+        json!(0.01_f64 + 0.06_f64)
+    );
+    assert_eq!(trade["sell_targets"].as_array().unwrap().len(), 1);
+    assert_eq!(trade["sell_targets"][0]["fraction"].as_f64(), Some(1.));
+    // 7 lots at this price meet 10; 6 lots fail. Float-total allocation must not lose a lot.
+    account.job.signal_data["is_long"] = json!(false);
+    account.job.signal_data["sell_targets"] = json!(["150"]);
+    assert!(build_trade(&account, 0.95, 1).is_ok());
+}
+
+#[test]
+fn reduction_uses_target_notional_and_retains_effective_quantity_minimum() {
+    let mut short = allocation_account(0.01, false);
+    short.job.channel_settings["default_sell_targets"] = json!([{"fraction":1}]);
+    short.settings = resolve_settings(&short.job).unwrap();
+    assert_eq!(
+        build_trade(&short, 0.95, 1).err(),
+        Some(TradeBuildError::Rejected("insufficientTargetBalance"))
+    );
+    let mut long = allocation_account(0.01, true);
+    long.job.channel_settings["default_sell_targets"] = json!([{"fraction":1}]);
+    long.settings = resolve_settings(&long.job).unwrap();
+    assert!(build_trade(&long, 0.95, 1).is_ok());
+    let mut account = allocation_account(0.03, true);
+    account.job.market_data["bingXFutures"]["currPrice"] = json!(500);
+    account.job.signal_data["buy_targets"] = json!(["500"]);
+    account.admission.available_balance = 15.; // q=.03; effective minQty=10/500=.02.
+    account.settings = resolve_settings(&account.job).unwrap();
+    let trade = build_trade(&account, 0.95, 1).unwrap().trade_object;
+    assert_eq!(trade["sell_targets"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn reduction_validates_omitted_prices_and_preserves_internal_entry_failures() {
+    let mut account = allocation_account(0.01, true);
+    account.job.channel_settings["default_sell_targets"] = json!([{"fraction":1}]);
+    account.job.signal_data["sell_targets"] = json!(["1100", "900"]);
+    account.settings = resolve_settings(&account.job).unwrap();
+    assert_eq!(
+        build_trade(&account, 0.95, 1).err(),
+        Some(TradeBuildError::Rejected("profitInsideEntryZone"))
+    );
+    let account = allocation_account(0.001, true);
+    let Err(TradeBuildError::Rejected(reason)) = build_trade(&account, 0.95, 1) else {
+        panic!("invalid entry")
+    };
+    assert!(account.user_failure(reason).is_none());
+}
+
+#[test]
+fn reduction_applies_pro_minimum_to_single_target_without_basic_multiplier() {
+    let mut account = allocation_account(0.02, true);
+    account.job.channel_settings["default_sell_targets"] = json!([{"fraction":1}]);
+    account.settings = resolve_settings(&account.job).unwrap();
+    assert!(build_trade(&account, 0.95, 1).is_ok());
+    account.job.channel_settings["xPro"] = json!(1);
+    account.settings = resolve_settings(&account.job).unwrap();
+    assert_eq!(
+        build_trade(&account, 0.95, 1).err(),
+        Some(TradeBuildError::Rejected("insufficientTargetBalance"))
+    );
+    let reason = "insufficientTargetBalance";
+    assert!(account.user_failure(reason).is_some());
+}
+
+#[test]
+fn reported_eth_short_reduces_per_account_without_changing_entry_size() {
+    for (balance, size, quantity, count) in [
+        (132.1791, 0.1, 0.04, 3),
+        (200., 0.1, 0.06, 3),
+        (330., 0.1, 0.10, 4),
+        (150., 0.3, 0.13, 1),
+    ] {
+        let mut account = allocation_account(quantity, false);
+        account
+            .job
+            .signal_data
+            .as_object_mut()
+            .unwrap()
+            .remove("position");
+        account.job.signal_data["leverage"] = json!("7x");
+        account.job.signal_data["buy_targets"] = json!(["2400"]);
+        account.job.signal_data["sell_targets"] = json!(["2200", "2100", "2050", "1980"]);
+        account.job.signal_data["stop_loss"] = json!("2650");
+        account.job.market_data["bingXFutures"]["currPrice"] = json!("2269.99");
+        account.job.market_data["bingXFutures"]["symbolInfo"]["minNotional"] = json!(2);
+        account.job.channel_settings["default_quantity"] = json!(size);
+        if count == 1 {
+            account.job.channel_settings["default_sell_targets"] = json!([{"fraction":1}]);
+        }
+        account.admission.available_balance = balance;
+        account.settings = resolve_settings(&account.job).unwrap();
+        let trade = build_trade(&account, 0.95, 1).unwrap().trade_object;
+        assert_eq!(trade["quantity"], json!(quantity));
+        assert_eq!(trade["buy_targets"][0]["price"], "2400.00");
+        assert_eq!(trade["sell_targets"].as_array().unwrap().len(), count);
+        assert_eq!(trade["sell_targets"][0]["price"], "2200.00");
+        assert_eq!(trade["stop_loss"]["price"], "2650.00");
+    }
 }

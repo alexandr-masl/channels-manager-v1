@@ -2470,6 +2470,8 @@
         "keySecret": "fixture-secret",
         "name": "Fixture account"
       }
-    }
+    },
+    "expected_error": "insufficientTargetBalance",
+    "policy_change": "Every one-target Pro candidate now enforces both 3.5x minimums, including the initial candidate."
   }
 ]

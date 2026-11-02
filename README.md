@@ -211,3 +211,10 @@ with one format per signal. Percentage prices use each client's resolved leverag
 and weighted entry price. SHORT percentages must be below `leverage × 100`;
 mixed formats reject before account calls. See the
 [percentage rules](docs/signal-parser-rules.md#percentage-profit-targets).
+
+Profit targets automatically reduce when configured allocations cannot satisfy
+exchange limits after lot rounding. The planner keeps the earliest targets and
+redistributes reduced allocations equally, preserving position size and existing
+remainder handling. Exhausted minimums appear in user notification history;
+account-specific sizing diagnostics stay in logs. See
+[allocation rules](docs/signal-manager.md#profit-allocation-feasibility).

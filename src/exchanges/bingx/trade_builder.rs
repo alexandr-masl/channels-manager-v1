@@ -133,10 +133,10 @@ pub fn build_trade(
     });
     let (profits, stop) = targets::exits(ExitContext {
         signal,
+        job,
         config,
         precision: &precision,
         quantity,
-        notional: executable_notional,
         entries: &entries,
         pro,
         key: &job.idempotency_key,

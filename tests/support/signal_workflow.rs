@@ -23,6 +23,7 @@ pub enum Signal {
     Sol,
     Missing,
     Xlm,
+    Eth,
 }
 impl Signal {
     fn text(self) -> &'static str {
@@ -31,12 +32,14 @@ impl Signal {
             Self::Sol => include_str!("../fixtures/signals/sol-50x.txt"),
             Self::Missing => include_str!("../fixtures/signals/ada-no-leverage.txt"),
             Self::Xlm => include_str!("../fixtures/signals/xlm-8x.txt"),
+            Self::Eth => include_str!("../fixtures/signals/eth-short-1x.txt"),
         }
     }
     fn symbol(self) -> &'static str {
         match self {
             Self::Sol => "SOL-USDT",
             Self::Xlm => "XLM-USDT",
+            Self::Eth => "ETH-USDT",
             _ => "ADA-USDT",
         }
     }
@@ -46,6 +49,7 @@ impl Signal {
             Self::Sol => "72.00",
             Self::Missing => "0.2570",
             Self::Xlm => "0.188920",
+            Self::Eth => "1000.00",
         }
     }
 }
@@ -78,12 +82,23 @@ pub struct Scenario {
     pub channel_terminal: Option<&'static str>,
     pub rejection_reason: Option<&'static str>,
     pub percentage: Option<PercentageExpectation>,
+    pub allocation: Option<AllocationExpectation>,
 }
 pub struct PercentageExpectation {
     pub parsed: Value,
     pub prices: Vec<Vec<&'static str>>,
     /// Per-user selected entries: price, fraction, executable quantity.
     pub entries: Vec<Vec<(&'static str, f64, f64)>>,
+}
+/// Manually specified allocation boundaries, independent of the production planner.
+pub struct AllocationExpectation {
+    pub balances: Vec<&'static str>,
+    pub min_qty: f64,
+    pub configured_fractions: Vec<f64>,
+    pub quantities: Vec<f64>,
+    /// None means this account must not publish a final trade.
+    pub profits: Vec<Option<Vec<(&'static str, f64)>>>,
+    pub failures: Vec<Option<&'static str>>,
 }
 impl Scenario {
     pub fn base(name: &'static str, signal: Signal, leverage: u32) -> Self {
@@ -110,6 +125,7 @@ impl Scenario {
             channel_terminal: None,
             rejection_reason: None,
             percentage: None,
+            allocation: None,
         }
     }
     fn publishes(&self) -> bool {
@@ -124,6 +140,19 @@ impl Scenario {
                 .iter()
                 .all(|value| *value <= self.max_leverage)
             && self.channel_terminal.is_none()
+    }
+    fn failure_for(&self, index: usize) -> Option<&'static str> {
+        self.allocation.as_ref().map_or_else(
+            || self.failure_reason(),
+            |expected| expected.failures[index],
+        )
+    }
+    fn publishes_for(&self, index: usize) -> bool {
+        self.publishes()
+            && self
+                .allocation
+                .as_ref()
+                .is_none_or(|expected| expected.profits[index].is_some())
     }
     fn failure_reason(&self) -> Option<&'static str> {
         if self.blocked {
@@ -145,7 +174,8 @@ impl Scenario {
             .text()
             .lines()
             .filter(|line| {
-                (self.targets || !line.contains("Tg")) && (self.stop || !line.contains("SL"))
+                let label = line.to_ascii_uppercase();
+                (self.targets || !label.contains("TG")) && (self.stop || !label.contains("SL"))
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -167,15 +197,18 @@ fn http_script(s: &Scenario) -> Vec<Vec<Expected>> {
         return vec![];
     }
     let symbol = s.signal.symbol();
+    let metadata = if let Some(expected) = &s.allocation {
+        json!([{"symbol":symbol,"status":1,"pricePrecision":2,"quantityPrecision":2,"size":"0.01","tradeMinQuantity":expected.min_qty,"tradeMinUSDT":"10"}])
+    } else {
+        json!([{"symbol":symbol,"status":1,"pricePrecision":4,"quantityPrecision":1,"tradeMinUSDT":"1"}])
+    };
     let mut phases = vec![
         vec![Expected::new(
             "GET",
             "/openApi/swap/v2/quote/contracts",
             &[("symbol", symbol)],
             false,
-            response(
-                json!([{"symbol":symbol,"status":1,"pricePrecision":4,"quantityPrecision":1,"tradeMinUSDT":"1"}]),
-            ),
+            response(metadata),
         )],
         vec![Expected::new(
             "GET",
@@ -203,7 +236,11 @@ fn http_script(s: &Scenario) -> Vec<Vec<Expected>> {
         telegram.response = json!({"ok":false});
     }
     phases.push(vec![telegram]);
-    for leverage in &s.resolved {
+    for (index, leverage) in s.resolved.iter().enumerate() {
+        let balance = s
+            .allocation
+            .as_ref()
+            .map_or(s.balance, |expected| expected.balances[index]);
         let positions = if s.blocked {
             json!([{"positionId":"occupied","symbol":symbol,"positionSide":"LONG","positionAmt":"1"}])
         } else if s.mode == Mode::OneWay {
@@ -215,7 +252,7 @@ fn http_script(s: &Scenario) -> Vec<Vec<Expected>> {
             Expected::new("GET","/openApi/swap/v1/positionSide/dual",&[],true,response(json!({"dualSidePosition":s.mode==Mode::Hedge}))),
             Expected::new("GET","/openApi/swap/v2/user/positions",&[],true,response(positions)),
             Expected::new("GET","/openApi/swap/v2/trade/openOrders",&[],true,response(json!({"orders":[]}))),
-            Expected::new("GET","/openApi/swap/v3/user/balance",&[],true,response(json!([{"asset":"USDT","availableMargin":s.balance}]))),
+            Expected::new("GET","/openApi/swap/v3/user/balance",&[],true,response(json!([{"asset":"USDT","availableMargin":balance}]))),
             Expected::new("GET","/openApi/swap/v2/trade/leverage",&[("symbol",symbol)],true,response(json!({"longLeverage":s.current_leverage,"shortLeverage":s.current_leverage,"maxLongLeverage":s.max_leverage,"maxShortLeverage":s.max_leverage}))),
         ]);
         if s.mode == Mode::Switch {
@@ -385,6 +422,16 @@ pub async fn run(broker: &Broker, s: Scenario) {
         );
         channel.insert("default_sell_targets", vec![doc! {"fraction":0.25}; 4]);
     }
+    if let Some(expected) = &s.allocation {
+        channel.insert(
+            "default_sell_targets",
+            expected
+                .configured_fractions
+                .iter()
+                .map(|fraction| doc! {"fraction":fraction})
+                .collect::<Vec<_>>(),
+        );
+    }
     if let Some(leverage) = &s.channel_leverage {
         channel
             .get_document_mut("futures")
@@ -499,20 +546,73 @@ pub async fn run(broker: &Broker, s: Scenario) {
             }
         })
         .await;
-    if s.failure_reason().is_some() {
+    let failure_count = (0..count)
+        .filter(|index| s.failure_for(*index).is_some())
+        .count();
+    if failure_count > 0 {
         process
             .wait_for(|lines| {
                 lines
                     .iter()
                     .filter(|line| line.starts_with("user_failure_notification_saved:"))
                     .count()
-                    == count
+                    == failure_count
             })
             .await;
     }
     process.stop().await;
     http.assert_complete();
     let journal = process.journal.lock().unwrap().clone();
+    if let Some(expected) = &s.allocation {
+        for index in 0..count {
+            let account = format!("account-{}", 42 + index);
+            if let Some(reason) = expected.failures[index] {
+                assert!(
+                    journal
+                        .iter()
+                        .any(|line| line.starts_with("Client trade rejected:")
+                            && line.contains(&format!("account_id={}", json!(account)))
+                            && line.contains(&format!("reason={reason}")))
+                );
+            }
+            let diagnostics: Vec<Value> = journal
+                .iter()
+                .filter_map(|line| {
+                    line.strip_prefix("Profit allocation rejected: ")
+                        .or_else(|| line.strip_prefix("Profit targets reduced: "))
+                        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+                        .filter(|value| value["account_id"] == account)
+                })
+                .collect();
+            let reduced = s.targets
+                && expected.profits[index].as_ref().is_some_and(|profits| {
+                    profits.len() < expected.configured_fractions.len().min(4)
+                });
+            let exhausted = expected.failures[index] == Some("insufficientTargetBalance");
+            assert_eq!(diagnostics.len(), usize::from(reduced || exhausted));
+            if let Some(diagnostic) = diagnostics.first() {
+                assert_eq!(diagnostic["channel_id"], CHANNEL);
+                assert_eq!(diagnostic["message_id"], 7);
+                assert_eq!(diagnostic["account_name"], "BingX-1");
+                assert_eq!(
+                    diagnostic["original_count"],
+                    expected.configured_fractions.len().min(4)
+                );
+                assert_eq!(
+                    diagnostic["final_count"],
+                    expected.profits[index].as_ref().map_or(0, Vec::len)
+                );
+                if exhausted {
+                    assert_eq!(diagnostic["constraint"], "minNotional");
+                    assert_eq!(diagnostic["quantity"], "0.01");
+                    assert_eq!(diagnostic["notional"], "9");
+                    assert_eq!(diagnostic["minimum"], "10");
+                }
+                let text = diagnostic.to_string();
+                assert!(!text.contains("fixture-key") && !text.contains("fixture-secret"));
+            }
+        }
+    }
     let expected_rejection = if let Some(reason) = s.rejection_reason {
         Some(reason)
     } else if let Some(reason) = s.failure_reason() {
@@ -551,11 +651,11 @@ pub async fn run(broker: &Broker, s: Scenario) {
         }
         assert_eq!(
             history.len(),
-            existing + usize::from(s.failure_reason().is_some()),
+            existing + usize::from(s.failure_for(index).is_some()),
             "history for {}",
             s.name
         );
-        if let Some(reason) = s.failure_reason() {
+        if let Some(reason) = s.failure_for(index) {
             let notice = history[existing].as_document().unwrap();
             assert_eq!(
                 notice.get_str("info").unwrap(),
@@ -697,13 +797,30 @@ pub async fn run(broker: &Broker, s: Scenario) {
     }
     assert_eq!(
         outputs.len(),
-        if s.publishes() { count } else { 0 },
+        (0..count).filter(|index| s.publishes_for(*index)).count(),
         "{}: {outputs:?}; HTTP {}",
         s.name,
         http.journal()
     );
     outputs.sort_by_key(|o| o["trade_object"]["chat_id"].as_i64().unwrap());
-    for (index, actual) in outputs.iter().enumerate() {
+    assert_eq!(
+        outputs
+            .iter()
+            .map(|output| output["trade_object"]["chat_id"].as_i64().unwrap())
+            .collect::<Vec<_>>(),
+        (0..count)
+            .filter(|index| s.publishes_for(*index))
+            .map(|index| 42 + index as i64)
+            .collect::<Vec<_>>(),
+        "published account identities for {}",
+        s.name
+    );
+    for actual in &outputs {
+        let index = (actual["trade_object"]["chat_id"].as_i64().unwrap() - 42) as usize;
+        assert!(
+            index < count && s.publishes_for(index),
+            "unexpected account output: {actual}"
+        );
         let mut expected = expected(&s, index);
         expected["expires_at"] = summary.as_ref().unwrap()["expires_at_ms"].clone();
         assert_eq!(*actual, expected, "complete final envelope for {}", s.name);
@@ -755,6 +872,9 @@ pub async fn run(broker: &Broker, s: Scenario) {
     );
 }
 fn expected(s: &Scenario, index: usize) -> Value {
+    if let Some(allocation) = &s.allocation {
+        return expected_allocation(s, allocation, index);
+    }
     if let Some(percentage) = &s.percentage {
         return expected_percentage(s, percentage, index);
     }
@@ -767,7 +887,7 @@ fn expected(s: &Scenario, index: usize) -> Value {
             7 => include_str!("../fixtures/signals/ada-fallback-7x.expected.json"),
             _ => panic!("missing expected fixture"),
         },
-        Signal::Xlm => unreachable!("percentage expectation required"),
+        Signal::Xlm | Signal::Eth => unreachable!("custom expectation required"),
     };
     let mut value: Value = serde_json::from_str(fixture).unwrap();
     value["client_data"]["name"] = json!("BingX-1");
@@ -828,6 +948,43 @@ fn expected_percentage(s: &Scenario, expected: &PercentageExpectation, index: us
     trade["routing"]["partitionKey"] =
         json!(format!("client-symbol:account-{user}:futures:XLMUSDT"));
     trade.as_object_mut().unwrap().remove("stop_loss");
+    value["client_data"]["chatId"] = json!(user);
+    value["client_data"]["clientId"] = json!(format!("account-{user}"));
+    value["client_data"]["name"] = json!("BingX-1");
+    value
+}
+
+fn expected_allocation(s: &Scenario, expected: &AllocationExpectation, index: usize) -> Value {
+    let mut value: Value =
+        serde_json::from_str(include_str!("../fixtures/signals/ada-3x.expected.json")).unwrap();
+    let user = 42 + index as i64;
+    let key = format!("auto-trade:{CHANNEL}:7:{user}:account-{user}:BingX:futures:ETHUSDT");
+    let id = |text: &str| format!("{:x}", Sha256::digest(text.as_bytes()))[..32].to_owned();
+    let quantity = expected.quantities[index];
+    let margin = expected.balances[index].parse::<f64>().unwrap() * 0.1;
+    let trade = &mut value["trade_object"];
+    trade["id"] = json!(id(&key));
+    trade["symbol"] = json!("ETH-USDT");
+    trade["chat_id"] = json!(user);
+    trade["is_long"] = json!(false);
+    trade["quantity"] = json!(quantity);
+    trade["used_coins"]["wished_quantity"] = json!(quantity);
+    trade["precisions"] = json!({"symbol":"ETH-USDT","priceRangeUp":5,"priceRangeDown":0.5,"tickSize":0.01,"minQty":expected.min_qty,"maxQty":100.0,"minNotional":10.0,"lotSize":0.01});
+    trade["buy_targets"] = json!([{"price":"1000.00","symbol":"ETH-USDT","clientOrderId":id(&format!("{key}:BT:0")),"opened":true,"status":"new","role":"BT","side":"SELL","type":"LIMIT","quantity":quantity,"fraction":1}]);
+    trade["sell_targets"] = json!(expected.profits[index].as_ref().unwrap().iter().enumerate().map(|(i,(price,fraction))| json!({"price":price,"symbol":"ETH-USDT","clientOrderId":id(&format!("{key}:ST:{i}")),"opened":true,"status":"new","role":"ST","side":"BUY","type":"LIMIT","fraction":fraction})).collect::<Vec<_>>());
+    if s.stop {
+        trade["stop_loss"] = json!({"price":"1100.00","symbol":"ETH-USDT","clientOrderId":id(&format!("{key}:SL:0")),"opened":true,"status":"new","role":"SL","side":"BUY","type":"STOP_LOSS_LIMIT"});
+    } else {
+        trade.as_object_mut().unwrap().remove("stop_loss");
+    }
+    trade["positionSizing"] = json!({"mode":"dynamic","source":"channel","requestedQuoteAmount":margin,"effectiveQuoteAmount":margin,"balanceFallbackApplied":false,"fallbackUsageRatio":null,"marginQuoteAmount":margin,"notionalQuoteAmount":margin,"rawTradeQuantity":margin/1000.0,"executableTradeQuantity":quantity,"executableNotionalQuoteAmount":quantity*1000.0,"display":"10%","balanceFraction":0.1});
+    trade["auto_Trade"]["usingChannelConfig"] = json!(true);
+    trade["auto_Trade"]["exchangeClientName"] = json!("BingX-1");
+    trade["tradeLeverage"] = json!("1x");
+    trade["idempotencyKey"] = json!(key);
+    trade["routing"]["symbol"] = json!("ETHUSDT");
+    trade["routing"]["partitionKey"] =
+        json!(format!("client-symbol:account-{user}:futures:ETHUSDT"));
     value["client_data"]["chatId"] = json!(user);
     value["client_data"]["clientId"] = json!(format!("account-{user}"));
     value["client_data"]["name"] = json!("BingX-1");

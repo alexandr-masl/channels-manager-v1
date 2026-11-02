@@ -17,7 +17,7 @@ mod services;
 #[path = "support/signal_workflow.rs"]
 mod signal_workflow;
 use serde_json::json;
-use signal_workflow::{Mode, PercentageExpectation, Scenario, Signal};
+use signal_workflow::{AllocationExpectation, Mode, PercentageExpectation, Scenario, Signal};
 
 fn percentage_scenario(name: &'static str) -> Scenario {
     let mut scenario = Scenario::base(name, Signal::Xlm, 8);
@@ -26,6 +26,31 @@ fn percentage_scenario(name: &'static str) -> Scenario {
         prices: vec![vec!["0.165305", "0.141690", "0.118075", "0.094460"]],
         entries: vec![vec![("0.188920", 1.0, 211.7)]],
     });
+    scenario
+}
+
+fn allocation_scenario(name: &'static str) -> Scenario {
+    let mut scenario = Scenario::base(name, Signal::Eth, 1);
+    scenario.overrides = vec![None, None, None];
+    scenario.resolved = vec![1, 1, 1];
+    scenario.allocation = Some(AllocationExpectation {
+        balances: vec!["100", "900", "2000"],
+        min_qty: 0.01,
+        configured_fractions: vec![0.4, 0.3, 0.2, 0.1],
+        quantities: vec![0.01, 0.09, 0.2],
+        profits: vec![
+            None,
+            Some(vec![("900.00", 0.33), ("800.00", 0.33), ("700.00", 0.34)]),
+            Some(vec![
+                ("900.00", 0.4),
+                ("800.00", 0.3),
+                ("700.00", 0.2),
+                ("600.00", 0.1),
+            ]),
+        ],
+        failures: vec![Some("insufficientTargetBalance"), None, None],
+    });
+    scenario.rejection_reason = Some("insufficientTargetBalance");
     scenario
 }
 
@@ -176,6 +201,63 @@ async fn signal_workflow_matrix() {
     ceiling.percentage.as_mut().unwrap().parsed["sell_targets"] =
         json!([{"type":"percent","value":800.0,"raw":"800%"}]);
     scenarios.push(ceiling);
+    // Same signal, different account sizes: valid entry but no feasible exit,
+    // reduction to three, and preservation of the configured four-target split.
+    scenarios.push(allocation_scenario(
+        "eth-account-specific-profit-allocation",
+    ));
+    let mut percent = allocation_scenario("eth-percentage-profit-allocation");
+    percent.raw_text =
+        Some("ETHUSDT SHORT\nENTRY 1000\nTG1 10%\nTG2 20%\nTG3 30%\nTG4 40%\nLEVERAGE 1x\nSL 1100");
+    scenarios.push(percent);
+
+    let mut single = allocation_scenario("eth-configured-single-profit-target");
+    single.overrides = vec![None];
+    single.resolved = vec![1];
+    single.rejection_reason = None;
+    let expected = single.allocation.as_mut().unwrap();
+    expected.balances = vec!["200"];
+    expected.quantities = vec![0.02];
+    // One configured target must keep one target even with four source prices.
+    expected.configured_fractions = vec![1.0];
+    expected.profits = vec![Some(vec![("900.00", 1.0)])];
+    expected.failures = vec![None];
+    scenarios.push(single);
+
+    for (name, targets, stop) in [
+        ("eth-reduced-profits-without-stop", true, false),
+        ("eth-stop-without-profits", false, true),
+        ("eth-without-exits", false, false),
+    ] {
+        let mut optional = allocation_scenario(name);
+        optional.targets = targets;
+        optional.stop = stop;
+        optional.overrides = vec![None];
+        optional.resolved = vec![1];
+        optional.rejection_reason = None;
+        let expected = optional.allocation.as_mut().unwrap();
+        expected.balances = vec!["900"];
+        expected.quantities = vec![0.09];
+        expected.profits = vec![Some(if targets {
+            vec![("900.00", 0.33), ("800.00", 0.33), ("700.00", 0.34)]
+        } else {
+            vec![]
+        })];
+        expected.failures = vec![None];
+        scenarios.push(optional);
+    }
+
+    let mut entry_minimum = allocation_scenario("eth-entry-minimum-is-internal");
+    entry_minimum.overrides = vec![None];
+    entry_minimum.resolved = vec![1];
+    entry_minimum.rejection_reason = Some("orderOutsideExchangeLimits");
+    let expected = entry_minimum.allocation.as_mut().unwrap();
+    expected.balances = vec!["100"];
+    expected.min_qty = 0.02;
+    expected.quantities = vec![0.01];
+    expected.profits = vec![None];
+    expected.failures = vec![None];
+    scenarios.push(entry_minimum);
     for scenario in scenarios {
         signal_workflow::run(&broker, scenario).await;
     }

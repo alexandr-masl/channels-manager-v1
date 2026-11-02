@@ -71,7 +71,14 @@ impl DeliveryHandler for ClientTradeHandler {
                             DeliveryOutcome::Rejected
                         }
                         Err(TradeBuildError::Rejected(reason)) => {
-                            println!("Client trade rejected: reason={reason}");
+                            println!(
+                                "Client trade rejected: channel_id={} message_id={} account_id={} account_name={} symbol={} reason={reason}",
+                                prepared.job.channel_id,
+                                prepared.job.message_id,
+                                prepared.job.client["clientId"],
+                                prepared.job.client["name"],
+                                prepared.job.symbol
+                            );
                             report_rejection(
                                 prepared.user_failure(reason).as_ref(),
                                 &services.mongo.notifications,
